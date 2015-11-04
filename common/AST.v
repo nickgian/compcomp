@@ -17,7 +17,7 @@
   the abstract syntax trees of many of the intermediate languages. *)
 
 Require Import Coqlib.
-Require String.
+Require Strings.String.
 Require Import Errors.
 Require Import Integers.
 Require Import Floats.

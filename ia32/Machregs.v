@@ -10,7 +10,7 @@
 (*                                                                     *)
 (* *********************************************************************)
 
-Require Import String.
+Require Import Strings.String.
 Require Import Coqlib.
 Require Import Maps.
 Require Import AST.

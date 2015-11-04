@@ -165,179 +165,28 @@ Section permMapDefs.
        PermMap.nextblock := Mem.nextblock_noaccess m
     |}.
 
-    Lemma permOrder_union_max :
-      forall (p1 p2 p3 p4 p : option permission),
-        Mem.perm_order'' p1 p3 ->
-        Mem.perm_order'' p2 p4 ->
-        perm_union p3 p4 = Some p ->
-        Mem.perm_order'' (perm_max p1 p2) p.
-    Proof.
-      (* intros ????? Hp13 Hp24 Hu34. *)
-      (* destruct p1,p2,p3,p4; simpl in *; try congruence; *)
-      (* inversion Hu34; subst; try econstructor(eauto). *)
-      (* inversion Hp13. inversion Hp24. *)
-      (* inversion Hp24. inversion Hp13. *)
-      (* inversion Hp24. inversion Hp24. *)
-      (* inversion Hp13. inversion Hp13. inversion Hp13. *)
-      admit.
-    Defined.
-
-    Lemma mapOrd : forall pmap b ofs pm pc f,
-                     Maps.PTree.get b (PermMap.map pmap).2 = Some f ->
-                     (f ofs Max) = Some pm ->
-                     (f ofs Cur) = Some pc ->
-                     perm_order pm pc.
-    Proof.
-      intros ?????? Hget Hfm Hfc.
-      destruct pmap; simpl in *.
-      specialize (max b ofs).
-      unfold Maps.PMap.get in max.
-      rewrite Hget in max.
-      rewrite Hfm Hfc in max. now simpl in max.
-    Qed.
-    
-    Definition permMapsUnion (pmap1 pmap2 : PermMap.t)
-               (Hget : forall b ofs k,
-                       (exists p1,
-                          Maps.PMap.get b (PermMap.map pmap1) ofs k = Some p1) <->
-                       exists p2,
-                         Maps.PMap.get b (PermMap.map pmap2) ofs k = Some p2)
-    : option PermMap.t.
-      refine
-        (if eq_block (PermMap.next pmap1) (PermMap.next pmap2) then
-           Some
-             {| PermMap.next := PermMap.next pmap1;
-                PermMap.map :=
-                  (fun ofs kind =>
-                     do! p1 <- (fst (PermMap.map pmap1)) ofs kind;
-                     do! p2 <- (fst (PermMap.map pmap2)) ofs kind;
-                     match kind with
-                       | Max =>
-                         Some (perm_max p1 p2)
-                     | Cur => perm_union p1 p2
-                     end,
-                     Maps.PTree.combine
-                       (fun of1 of2 =>
-                          do! f1 <- of1;
-                          do! f2 <- of2;
-                          Some (fun ofs kind =>
-                                  do! p1 <- f1 ofs kind;
-                                  do! p2 <- f2 ofs kind;
-                                  match kind with
-                                    | Max =>
-                                      Some (perm_max p1 p2)
-                                    | Cur => perm_union p1 p2
-                                  end))
-                       (snd (PermMap.map pmap1)) (snd (PermMap.map pmap2)));
-                PermMap.max := _;
-                PermMap.nextblock := _ |}
-         else None).
-      Proof.
-        intros b ofs. Focus 2. admit.
-        unfold Maps.PMap.get.
-        rewrite Maps.PTree.gcombine.
-        simpl.
-        repeat match goal with
-                 | [ |- context[match ?Expr with _ => _ end]] =>
-                   destruct Expr eqn:?
-                | [H:context[match ?Expr with _ => _ end] |- _] =>
-                  destruct Expr eqn:?
-                | [H: Some _ = Some _ |- _] => inversion H; subst; clear H
-               end; simpl; auto; try congruence; 
-        repeat match goal with
-                 | [ |- context[match ?Expr with _ => _ end]] =>
-                   destruct Expr eqn:?
-                 | [H:context[match ?Expr with _ => _ end] |- _] =>
-                   destruct Expr eqn:?
-               end; auto;
-        subst;
-        destruct pmap1 as [next1 map1 max1 nextblock1];
-        destruct pmap2 as [next2 map2 max2 nextblock2]; simpl in *;
-        specialize (max1 b ofs);
-        specialize (max2 b ofs);
-        specialize (Hget b ofs Max).
-        Focus 7.
-        destruct Hget as [Hget1 _].
-        assert ( (exists p1 : permission, Maps.PMap.get b map1 ofs Max = Some p1) ).
-        eexists; unfold Maps.PMap.get. rewrite Heqo4.
-        eauto.
-        apply Hget1 in H. destruct H as [p3 H].
-        
-        unfold Mem.perm_order'' in max2.
-        rewrite H in max2.
-        unfold Maps.PMap.get in max2. rewrite 
-        rewrite H in max2. 
-        
-        
-
-        
-        
-        unfold Maps.PMap.get in *;
-        unfold Mem.perm_order'' in *;
-                 
-        repeat match goal with
-          | [H : context[match ?Expr with _ => _ end], H1: ?Expr = _ |- _] =>
-            rewrite H1 in H
-               end.
-        Focus 7. 
-        specialize (Hget Max).
-        destruct Hget as [Hget1 _].
-        assert (Hex1: exists p3 : permission, map1.1 ofs Max = Some p3) by (eexists; eauto).
-        apply Hget1 in Hex1. destruct Hex1 as [p3 Hget2].
-        destruct (Maps.PTree.get b map2.2) eqn:?;
-        repeat match goal with
-                 | [H : context[match ?Expr with _ => _ end], H1: ?Expr = _ |- _] =>
-                   rewrite H1 in H
-               end.
-        unfold Maps.PMap.get. rwrite 
-        
-       
-
-        
-        rewrite Heqo0 in max. rewrite Heqo in max. simpl in max.
-        match goal with
-          | [?F
-        
-        
-        Focus 2. 
-          
-
-    Lemma permMapsUnionCorrect : forall pmap1 pmap2,
-                                   eq_block (PermMap.next pmap1) (PermMap.next pmap2) ->
-                                   match permMapsUnion pmap1 pmap2 with
-                                     | Some pmap3 => 
-                                       isUnionPermMaps pmap1 pmap2 pmap3
-                                     | None => False
-                                   end.
-
-
     Inductive isUnionPermMaps : PermMap.t -> PermMap.t -> PermMap.t -> Prop :=
     | PMapsUnion :
         forall pmap1 pmap2 pmap3
                (Hnext : (PermMap.next pmap1) = (PermMap.next pmap2)
                         /\ (PermMap.next pmap1) = (PermMap.next pmap3))
-               (HmapCur: forall (b : positive) (ofs : Z) (p1 p2 : permission),
-                           Maps.PMap.get b (PermMap.map pmap1) ofs Cur = Some p1 ->
-                           Maps.PMap.get b (PermMap.map pmap2) ofs Cur = Some p2 ->
-                           Maps.PMap.get b (PermMap.map pmap3) ofs Cur = perm_union p1 p2)
-               (HmapCurNone: forall (b : positive) (ofs : Z) (p1 p2 : permission),
-                           (Maps.PMap.get b (PermMap.map pmap1) ofs Cur = None \/
-                           Maps.PMap.get b (PermMap.map pmap2) ofs Cur = None) ->
-                           Maps.PMap.get b (PermMap.map pmap3) ofs Cur = None)
-               (HmapMax: forall (b : positive) (ofs : Z) (p1 p2 : permission),
-                           Maps.PMap.get b (PermMap.map pmap1) ofs Max = Some p1 ->
-                           Maps.PMap.get b (PermMap.map pmap2) ofs Max = Some p2 ->
-                           Maps.PMap.get b (PermMap.map pmap3) ofs Max = Some (perm_max p1 p2))
-               (HmapMax: forall (b : positive) (ofs : Z) (p1 p2 : permission),
-                           (Maps.PMap.get b (PermMap.map pmap1) ofs Max = None \/
-                           Maps.PMap.get b (PermMap.map pmap2) ofs Max = None) ->
-                           Maps.PMap.get b (PermMap.map pmap3) ofs Max = None),
+               (HmapCur: forall (b : positive) (ofs : Z) (p1 p2 : option permission),
+                           Maps.PMap.get b (PermMap.map pmap1) ofs Cur = p1 ->
+                           Maps.PMap.get b (PermMap.map pmap2) ofs Cur = p2 ->
+                           exists p3, perm_union p1 p2 = Some p3 /\
+                           Maps.PMap.get b (PermMap.map pmap3) ofs Cur = p3)
+               (HmapMax: forall (b : positive) (ofs : Z) (p1 p2 : option permission),
+                           Maps.PMap.get b (PermMap.map pmap1) ofs Max = p1 ->
+                           Maps.PMap.get b (PermMap.map pmap2) ofs Max = p2 ->
+                           Maps.PMap.get b (PermMap.map pmap3) ofs Max = perm_max p1 p2),
           isUnionPermMaps pmap1 pmap2 pmap3.
 
-      
+    Definition canonicalize {A:Type} (t : Maps.PTree.t A) :=
+      foldl (fun acc x =>  Maps.PTree.set (fst x) (snd x) acc)
+            (Maps.PTree.empty A) (Maps.PTree.elements t).
+ 
 End permMapDefs.
 
-      
 Module ThreadPool. Section ThreadPool.
 
   Variable sem : Modsem.t.
@@ -420,7 +269,7 @@ Inductive permMapsInv : nat -> PermMap.t -> Prop :=
 | perm0 : forall (pf : 0 < num_threads), permMapsInv 0 (perm_maps tp (Ordinal pf)) 
 | permS : forall n (pf : n < num_threads) pprev punion,
             permMapsInv n pprev ->
-            permMapsUnion pprev (perm_maps tp (Ordinal pf)) punion ->
+            isUnionPermMaps pprev (perm_maps tp (Ordinal pf)) punion ->
             permMapsInv (S n) punion.
               
 End poolDefs.
@@ -449,23 +298,6 @@ Lemma getUpdPermOrd tid p :
 Proof.
     by [].
 Qed.
-
-Lemma permInvDet : forall n p1 p1',
-                     permMapsInv tp n p1 ->
-                     permMapsInv tp n p1' ->
-                     p1 = p1'.
-Proof.
-  induction n.
-  - intros. inversion H; inversion H0.
-      by have->: pf = pf0 by apply:proof_irr.
-  - intros p2 p2' Hp2 Hp2'.
-    inversion Hp2 as [|? pf pprev punion Hinv Hunion2].
-    inversion Hp2' as [|? pf' pprev' punion' Hinv' Hunion2']; subst.
-    (have pfeq: pf = pf' by apply:proof_irr); subst.
-    specialize (IHn _ _ Hinv Hinv'); subst.    
-    eapply permMapsUnionDet; eauto.
-Qed.
-    
 
 End poolLemmas.
 
@@ -583,7 +415,7 @@ Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
       permMapsInv tp' (num_threads tp') pnew ->
       updPermMap m'' pnew = Some m' -> 
       step tp m tp' m'
-
+  
   | step_unlock :
       forall tp tp' m c m'' c' m' b ofs pnew,
       let: n := counter tp in
@@ -795,92 +627,92 @@ Variable schedule : nat -> nat.
 
 Notation thread_sem := (@Concur.semantics sem aggelos schedule).
 
-Lemma thread_det :
-  semantics_lemmas.corestep_fun the_sem ->
-  semantics_lemmas.corestep_fun thread_sem.
-Proof. 
-move=> Hfun m m' m'' ge tp tp' tp''; case; move {tp tp' m m'}.
-{ move=> tp m c m' c' n pf get cant step0 step.
-  case: step pf get step0 cant; move {tp tp'' m''}.
-  + move=> tp m'' c'' m''' c''' n' pf get step cant' pf'; move: get step.
-    have ->: pf' = pf by apply: proof_irr.
-    move=> -> step; case=> <- cant'' step'.
-    by case: (corestepN_fun_cant Hfun step step')=> // <- <-; split.
-  + move {m}=> tp m c'' b ofs pf get Hat Hhdl pf'.
-    have ->: pf' = pf by apply: proof_irr.
-    rewrite get; case=> <- cant step.
-    simpl in step; case: step=> ? []? []step ?.
-    by move: (corestep_not_at_external _ _ _ _ _ _ step); rewrite Hat.
-  + move {m}=> tp tp' m c'' m'' c''' m''' b ofs pnew pf get load store aft upd inv updp pf'.
-    have ->: pf' = pf by apply:proof_irr.
-    by rewrite get.
-  + move {m}=> tp tp' m c'' m'' c''' m''' b ofs pnew pf get load store aft upd inv updp pf'.
-    have ->: pf' = pf by apply:proof_irr.
-    by rewrite get.
-  + move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-}
-{ move=> tp m c b ofs pf get Hat Hhdl step; 
-  case: step pf get Hat Hhdl; move {tp m tp'' m''}.
-  + move=> ?????? pf' get step cant pf; have <-: pf' = pf by apply: proof_irr.
-    rewrite get; case=> <- H. 
-    simpl in step; case: step=> ? []? []step.
-    by erewrite corestep_not_at_external in H; eauto.
-  + move=> ????? pf' get Hat Hhdl pf; have <-: pf' = pf by apply: proof_irr.
-    by rewrite get; case=> <-; rewrite Hat; case=> -> _ -> _; split.
-  + move=> ?????????? pf get ?????? pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ?????????? pf get ?????? pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-}
-{ move=> tp tp' m c m''' c' m' b ofs pnew pf get load store aft upd inv updp step.
-  case: step pf get upd inv updp load store; move {tp m tp'' m''}.
-  + move=> ?????? pf get step0 cant pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ?????????? pf get load store aft' upd inv updp pf'. 
-    have ->: pf' = pf by apply: proof_irr.
-    rewrite get. case=> <- <- cs_eq upd' inv' updp' load'. rewrite store; case=> mem_eq; subst.
-    by move: aft'; rewrite aft; case=> ->; move: upd'; rewrite upd; case=> ->; split.
-  + move=> tp m c'' m'' c'''' m'''' b' ofs' pf get ? store aft' upd' pf'.
-    have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ??????? pf get init aft' pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-}
-{ move=> tp m c m''' c' m' b ofs pf get load store aft upd step. 
-  case: step pf get load store aft upd; move {tp m tp'' m''}.
-  + move=> ?????? pf get step cant pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ???????? pf get load store aft upd pf'. 
-    have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ???????? pf get ? store aft upd pf'.
-    have ->: pf' = pf by apply: proof_irr.
-    rewrite get; case=> <- <- <- _; rewrite store; case=> <-.
-    by rewrite aft; case=> <-; rewrite upd; split.
-  + move=> ??????? pf get init aft pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-}
-{ move=> tp m c c' c_new vf arg pf get init aft step.
-  case: step pf get init aft; move {tp m tp'' m''}.
-  + move=> ?????? pf get ? cant pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ???????? pf get ? store aft upd pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ???????? pf get ? store aft upd pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get.
-  + move=> ??????? pf get init aft pf'; have ->: pf' = pf by apply: proof_irr.
-    by rewrite get; case=> <- <- <-; rewrite init; case=> <-; rewrite aft; case=> <-.
-}      
-Qed.
+(* Lemma thread_det : *)
+(*   semantics_lemmas.corestep_fun the_sem -> *)
+(*   semantics_lemmas.corestep_fun thread_sem. *)
+(* Proof.  *)
+(* move=> Hfun m m' m'' ge tp tp' tp''; case; move {tp tp' m m'}. *)
+(* { move=> tp m c m' c' n pf get cant step0 step. *)
+(*   case: step pf get step0 cant; move {tp tp'' m''}. *)
+(*   + move=> tp m'' c'' m''' c''' n' pf get step cant' pf'; move: get step. *)
+(*     have ->: pf' = pf by apply: proof_irr. *)
+(*     move=> -> step; case=> <- cant'' step'. *)
+(*     by case: (corestepN_fun_cant Hfun step step')=> // <- <-; split. *)
+(*   + move {m}=> tp m c'' b ofs pf get Hat Hhdl pf'. *)
+(*     have ->: pf' = pf by apply: proof_irr. *)
+(*     rewrite get; case=> <- cant step. *)
+(*     simpl in step; case: step=> ? []? []step ?. *)
+(*     by move: (corestep_not_at_external _ _ _ _ _ _ step); rewrite Hat. *)
+(*   + move {m}=> tp tp' m c'' m'' c''' m''' b ofs pnew pf get load store aft upd inv updp pf'. *)
+(*     have ->: pf' = pf by apply:proof_irr. *)
+(*     by rewrite get. *)
+(*   + move {m}=> tp tp' m c'' m'' c''' m''' b ofs pnew pf get load store aft upd inv updp pf'. *)
+(*     have ->: pf' = pf by apply:proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(* } *)
+(* { move=> tp m c b ofs pf get Hat Hhdl step;  *)
+(*   case: step pf get Hat Hhdl; move {tp m tp'' m''}. *)
+(*   + move=> ?????? pf' get step cant pf; have <-: pf' = pf by apply: proof_irr. *)
+(*     rewrite get; case=> <- H.  *)
+(*     simpl in step; case: step=> ? []? []step. *)
+(*     by erewrite corestep_not_at_external in H; eauto. *)
+(*   + move=> ????? pf' get Hat Hhdl pf; have <-: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get; case=> <-; rewrite Hat; case=> -> _ -> _; split. *)
+(*   + move=> ?????????? pf get ?????? pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ?????????? pf get ?????? pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(* } *)
+(* { move=> tp tp' m c m''' c' m' b ofs pnew pf get load store aft upd inv updp step. *)
+(*   case: step pf get upd inv updp load store; move {tp m tp'' m''}. *)
+(*   + move=> ?????? pf get step0 cant pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ?????????? pf get load store aft' upd inv updp pf'.  *)
+(*     have ->: pf' = pf by apply: proof_irr. *)
+(*     rewrite get. case=> <- <- cs_eq upd' inv' updp' load'. rewrite store; case=> mem_eq; subst. *)
+(*     by move: aft'; rewrite aft; case=> ->; move: upd'; rewrite upd; case=> ->; split. *)
+(*   + move=> tp m c'' m'' c'''' m'''' b' ofs' pf get ? store aft' upd' pf'. *)
+(*     have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ??????? pf get init aft' pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(* } *)
+(* { move=> tp m c m''' c' m' b ofs pf get load store aft upd step.  *)
+(*   case: step pf get load store aft upd; move {tp m tp'' m''}. *)
+(*   + move=> ?????? pf get step cant pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ???????? pf get load store aft upd pf'.  *)
+(*     have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ???????? pf get ? store aft upd pf'. *)
+(*     have ->: pf' = pf by apply: proof_irr. *)
+(*     rewrite get; case=> <- <- <- _; rewrite store; case=> <-. *)
+(*     by rewrite aft; case=> <-; rewrite upd; split. *)
+(*   + move=> ??????? pf get init aft pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(* } *)
+(* { move=> tp m c c' c_new vf arg pf get init aft step. *)
+(*   case: step pf get init aft; move {tp m tp'' m''}. *)
+(*   + move=> ?????? pf get ? cant pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ???????? pf get ? store aft upd pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ???????? pf get ? store aft upd pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get. *)
+(*   + move=> ??????? pf get init aft pf'; have ->: pf' = pf by apply: proof_irr. *)
+(*     by rewrite get; case=> <- <- <-; rewrite init; case=> <-; rewrite aft; case=> <-. *)
+(* }       *)
+(* Qed. *)
 
 End ConcurLemmas.
 
@@ -910,7 +742,7 @@ Inductive fstep : thread_pool -> mem -> thread_pool -> mem -> Prop :=
       let: tid := Ordinal tid0_lt_pf in
       getThreadC tp tid = Krun c ->
       corestep the_sem the_ge c m c' m' ->
-      fstep tp m (schedNext (updThread tp tid (Krun c'))) m'
+      fstep tp m (schedNext (updThreadC tp tid (Krun c'))) m'
 
   | fstep_stage :
       forall tp m c ef args,
@@ -921,10 +753,10 @@ Inductive fstep : thread_pool -> mem -> thread_pool -> mem -> Prop :=
       getThreadC tp tid = Krun c ->
       semantics.at_external the_sem c = Some (ef, ef_sig ef, args) ->
       handled ef ->
-      fstep tp m (schedNext (updThread tp tid (Kstage ef args c))) m
+      fstep tp m (schedNext (updThreadC tp tid (Kstage ef args c))) m
 
   | fstep_lock :
-      forall tp m c m'' c' m' b ofs,
+      forall tp tp' m c m'' c' m' b ofs pnew,
       let: n := counter tp in
       let: tid0 := fschedule n in
       forall (tid0_lt_pf :  tid0 < num_threads tp),
@@ -933,11 +765,13 @@ Inductive fstep : thread_pool -> mem -> thread_pool -> mem -> Prop :=
       Mem.load Mint32 m b (Int.intval ofs) = Some (Vint Int.one) ->
       Mem.store Mint32 m b (Int.intval ofs) (Vint Int.zero) = Some m'' ->
       semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      updPermMap m'' (aggelos n) = Some m' -> 
-      fstep tp m (updThread tp tid (Krun c')) m'
+      tp' = updThread tp tid (Krun c') (aggelos n) ->
+      permMapsInv tp' (num_threads tp') pnew ->
+      updPermMap m'' pnew = Some m' -> 
+      fstep tp m tp' m'
 
   | fstep_unlock :
-      forall tp m c m'' c' m' b ofs,
+      forall tp tp' m c m'' c' m' b ofs pnew,
       let: n := counter tp in
       let: tid0 := fschedule n in
       forall (tid0_lt_pf :  tid0 < num_threads tp),
@@ -946,11 +780,13 @@ Inductive fstep : thread_pool -> mem -> thread_pool -> mem -> Prop :=
       Mem.load Mint32 m b (Int.intval ofs) = Some (Vint Int.zero) ->
       Mem.store Mint32 m b (Int.intval ofs) (Vint Int.one) = Some m'' ->
       semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      updPermMap m'' (aggelos n) = Some m' -> 
-      fstep tp m (updThread tp tid (Krun c')) m
+      tp' = updThread tp tid (Krun c') (aggelos n) ->
+      permMapsInv tp' (num_threads tp') pnew ->
+      updPermMap m'' pnew = Some m' -> 
+      fstep tp m tp' m'
 
   | fstep_create :
-      forall tp m c c' c_new vf arg,
+      forall tp tp' m m' c c' c_new vf arg pnew,
       let: n := counter tp in
       let: tid0 := fschedule n in
       forall (tid0_lt_pf :  tid0 < num_threads tp),
@@ -958,7 +794,12 @@ Inductive fstep : thread_pool -> mem -> thread_pool -> mem -> Prop :=
       getThreadC tp tid = Kstage CREATE (vf::arg::nil) c ->
       semantics.initial_core the_sem the_ge vf (arg::nil) = Some c_new ->
       semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      fstep tp m (schedNext (addThread (updThread tp tid (Krun c')) (Krun c_new))) m.
+      tp' = schedNext (addThread
+                         (updThread tp tid (Krun c') (aggelos (n+1)))
+                         (Krun c_new) (aggelos n)) ->
+      permMapsInv tp' (num_threads tp') pnew ->
+      updPermMap m pnew = Some m' -> 
+      fstep tp m tp' m'.
 
 End Corestep.
 
@@ -983,85 +824,25 @@ case: step pf get Hat Hhdl n; move {tp m tp' m'}.
   rewrite get; case=> <-; rewrite Hat; case=> <- /= _ _ Contra _. 
   by apply: Contra; apply/handledP.
 }
-{ move=> ???????? pf get Hat ??? pf'; have ->: pf' = pf by apply: proof_irr.
+{ move=> ?????????? pf get Hat ????? pf'; have ->: pf' = pf by apply: proof_irr.
   by rewrite get.
 }
-{ move=> ???????? pf get Hat ??? pf'; have ->: pf' = pf by apply: proof_irr.
+{ move=> ?????????? pf get Hat ????? pf'; have ->: pf' = pf by apply: proof_irr.
   by rewrite get.
 }
-{ move=> ??????? pf get init aft pf'; have ->: pf' = pf by apply: proof_irr.
+{ move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr.
   by rewrite get.
 }
 Qed.
 
-Lemma my_ltP m n : (m < n)%coq_nat -> (m < n).
-Proof. by move/ltP. Qed.
-
-Definition at_external (tp : thread_pool) 
-  : option (external_function * signature * seq val) := 
-  let: n := counter tp in
-  let: tid0 := fschedule n in
-  match lt_dec tid0 (num_threads tp) with
-    | left lt_pf => 
-      let: tid := Ordinal (my_ltP lt_pf) in
-      match getThreadC tp tid with 
-        | Krun c => 
-          match semantics.at_external the_sem c with
-            | None => None
-            | Some (ef, sg, args) => 
-              if handled ef then None 
-              else Some (ef, sg, args)
-          end
-        | Kstage _ _ _ => None
-      end
-    | right _ => None
-  end.
-
-Definition after_external (ov : option val) (tp : thread_pool) :=
-  let: n := counter tp in
-  let: tid0 := fschedule n in
-  match lt_dec tid0 (num_threads tp) with
-    | left lt_pf => 
-      let: tid := Ordinal (my_ltP lt_pf) in
-      match getThreadC tp tid with 
-        | Krun c => 
-          match semantics.after_external the_sem ov c with
-            | None => None
-            | Some c' => Some (schedNext (updThread tp tid (Krun c')))
-          end
-        | Kstage _ _ _ => None
-      end
-    | right _ => None
-  end.
-
-Definition one_pos : pos := mkPos NPeano.Nat.lt_0_1.
-
-Section InitialCore.
-
-Variable ge : Genv.t (Modsem.F sem) (Modsem.V sem).
-
-Definition initial_core (f : val) (args : list val) : option thread_pool :=
-  match initial_core the_sem ge f args with
-    | None => None
-    | Some c => 
-      Some (ThreadPool.mk 
-              one_pos 
-              (fun tid => if tid == ord0 then Krun c 
-                          else Krun c (*bogus value; can't occur*))
-              0)
-  end.
-
-End InitialCore.
-
-Definition halted (tp : thread_pool) : option val := None.
-
+Import Concur.
 Program Definition semantics :
   CoreSemantics (Genv.t (Modsem.F sem) (Modsem.V sem)) thread_pool mem :=
   Build_CoreSemantics _ _ _
-    initial_core 
-    at_external
-    after_external
-    halted
+    Concur.initial_core 
+    (Concur.at_external fschedule)
+    (Concur.after_external fschedule)
+    Concur.halted
     fstep
     _ _ _.
 Next Obligation.
@@ -1171,59 +952,20 @@ Section ConcurEquiv.
   (* Relating a fine grained and a coarse grained schedule*)
   Variable fsched : nat -> nat.
   
-  Inductive schedType (n : nat) : Type :=
-  | schedCore : ordinal n -> schedType n
-  | schedExt : ordinal n -> schedType n.
-  
-  Fixpoint filter_core {m:nat} (n : ordinal m) (xs : seq (schedType m)) :=
-    match xs with
-      | nil => nil
-      | x :: xs' =>
-        match x with
-          | schedCore k =>
-            if beq_nat (nat_of_ord k) (nat_of_ord n) then
-              filter_core n xs'
-            else x :: (filter_core n xs')
-          | schedExt k =>
-            if beq_nat (nat_of_ord k) (nat_of_ord n) then
-              xs
-            else
-              x :: (filter_core n xs')
-        end
-    end.
-
-  Lemma length_filter_core :
-    forall {m} n (xs : seq (schedType m)),
-      size (filter_core n xs) <= (size xs).
-  Proof.
-    intros.
-    induction xs as [|x xs']; simpl; auto.
-    destruct x as [k | k];
-      destruct (beq_nat k n); auto.
-  Defined.
-    
-  Program Fixpoint buildSched {m} (fs : seq (schedType m))
-          {measure (size fs)}:=
-    match fs with
-      | nil => nil
-      | (schedCore n) :: fs' =>
-        if has (fun x => match x with schedExt n => true | _ => false end) fs then
-          (schedCore n) :: (buildSched (filter_core n fs'))
-        else
-          buildSched (filter_core n fs')
-      | (schedExt n) :: fs' =>
-        (schedExt n) :: buildSched fs'
-    end.
-  Solve All Obligations using
-        (program_simpl;
-         simpl in *;
-           apply le_lt_n_Sm; apply/leP;
-         apply length_filter_core).
-
-  Definition trace :=
+   
+  Definition trace (step : forall sem : Modsem.t,
+                             (nat -> perm_map) ->
+                             (nat -> nat) ->
+                             Genv.t (Modsem.F sem) (Modsem.V sem) ->
+                             Top.pool sem -> mem -> Top.pool sem -> mem -> Prop)
+             (sched : nat -> nat) :=
     {xs : seq (thread_pool * mem) |
      forall x y, In2 x y xs ->
-                 fstep aggelos fsched the_ge (fst x) (snd x) (fst y) (snd y)}.
+                 step _ aggelos sched the_ge (fst x) (snd x) (fst y) (snd y)}.
+  
+  Inductive obs (tp : thread_pool) : trace -> Prop :=
+  | obs_chd : forall tr tp' m m',
+                  
 
   Lemma pf1 : 1 < 5. auto. Defined.
   Lemma pf2 : 2 < 5. auto. Defined.
@@ -1236,8 +978,6 @@ Section ConcurEquiv.
                                               (schedExt (Ordinal pf2)) ::
                                               (schedCore (Ordinal pf2)) :: nil).
   
-  Definition traceSched (xs : trace
-
   
   Require Import Coq.Relations.Relation_Operators.
 

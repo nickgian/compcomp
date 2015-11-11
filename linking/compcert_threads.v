@@ -56,20 +56,16 @@ Class monad (mon : Type -> Type) :=
 Notation "x >>= f" := (bind x f) (at level 40, left associativity).
 Notation "'do!' X <- A ; B" := (bind A (fun X => B))
                                  (at level 200, X ident, A at level 100, B at level 200).
-
-Module OptionMonad.
   
-  Instance optionMonad : monad option :=
-    {
-      ret A x := Some x;
-      bind A B x f :=
+Global Instance optionMonad : monad option :=
+  {
+    ret A x := Some x;
+    bind A B x f :=
         match x with
           | Some y => f y
           | None => None
         end
-    }.
-
-End OptionMonad.
+  }.
 
 Definition access_map := Maps.PMap.t (Z -> perm_kind -> option permission).
 
@@ -165,11 +161,18 @@ Section permMapDefs.
        PermMap.nextblock := Mem.nextblock_noaccess m
     |}.
 
+
+    (* Should there be an axiom Hnext :
+         next pmap1 > next pmap2 -> next pmap3 = next pmap1
+        /\ next pmap1 <= next pmap2 -> next pmap3 = next pmap2 ?*)
     Inductive isUnionPermMaps : PermMap.t -> PermMap.t -> PermMap.t -> Prop :=
     | PMapsUnion :
         forall pmap1 pmap2 pmap3
-               (Hnext : (PermMap.next pmap1) = (PermMap.next pmap2)
-                        /\ (PermMap.next pmap1) = (PermMap.next pmap3))
+               (Hnext:
+                  (Coqlib.Plt (PermMap.next pmap1) (PermMap.next pmap2) ->
+                   PermMap.next pmap3 = PermMap.next pmap1)
+                  /\ (~ Coqlib.Plt (PermMap.next pmap1) (PermMap.next pmap2) ->
+                      PermMap.next pmap3 = PermMap.next pmap2))
                (HmapCur: forall (b : positive) (ofs : Z) (p1 p2 : option permission),
                            Maps.PMap.get b (PermMap.map pmap1) ofs Cur = p1 ->
                            Maps.PMap.get b (PermMap.map pmap2) ofs Cur = p2 ->
@@ -180,10 +183,6 @@ Section permMapDefs.
                            Maps.PMap.get b (PermMap.map pmap2) ofs Max = p2 ->
                            Maps.PMap.get b (PermMap.map pmap3) ofs Max = perm_max p1 p2),
           isUnionPermMaps pmap1 pmap2 pmap3.
-
-    Definition canonicalize {A:Type} (t : Maps.PTree.t A) :=
-      foldl (fun acc x =>  Maps.PTree.set (fst x) (snd x) acc)
-            (Maps.PTree.empty A) (Maps.PTree.elements t).
  
 End permMapDefs.
 
@@ -201,10 +200,12 @@ Module ThreadPool. Section ThreadPool.
                 { num_threads : pos
                   ; pool :> 'I_num_threads -> ctl
                   ; perm_maps : 'I_num_threads -> PermMap.t
-                  ; counter : nat
+                  ; schedule : list pos
+                  ; counter : nat (* for angel *)
                 }.
 
 End ThreadPool. End ThreadPool.
+
 
 Arguments ThreadPool.Krun [sem] _.
 Arguments ThreadPool.Kstage [sem] _ _ _.
@@ -238,40 +239,74 @@ Definition addThread (c : ctl) (pmap : PermMap.t) : thread_pool :=
            | None => pmap
            | Some n' => (perm_maps tp) n'
          end)
+      (schedule tp)
       (counter tp).+1.
 
 Definition updThreadC (tid : 'I_num_threads) (c' : ctl) : thread_pool :=
   @mk sem num_threads (fun (n : 'I_num_threads) =>
                          if n == tid then c' else tp n) (perm_maps tp) 
-      (counter tp).
+      (schedule tp) (counter tp).
 
 Definition updThreadP (tid : 'I_num_threads) (pmap : PermMap.t) : thread_pool :=
   @mk sem num_threads tp (fun (n : 'I_num_threads) =>
                             if n == tid then pmap else (perm_maps tp) n) 
-      (counter tp).
+      (schedule tp) (counter tp).
 
-Definition updThread (tid : 'I_num_threads) (c' : ctl) (pmap : PermMap.t) : thread_pool :=
+Definition updThread (tid : 'I_num_threads) (c' : ctl)
+           (pmap : PermMap.t) (counter' : nat) : thread_pool :=
   @mk sem num_threads
       (fun (n : 'I_num_threads) =>
                          if n == tid then c' else tp n)
       (fun (n : 'I_num_threads) =>
          if n == tid then pmap else (perm_maps tp) n) 
-      (counter tp).
+      (schedule tp) (counter').
 
 Definition schedNext : thread_pool :=
-  @mk sem num_threads (pool tp) (perm_maps tp) (counter tp).+1.
+  @mk sem num_threads (pool tp) (perm_maps tp) (List.tl (schedule tp)) (counter tp).
 
 Definition getThreadC (tid : 'I_num_threads) : ctl := tp tid.
 
 Definition getThreadPerm (tid : 'I_num_threads) : PermMap.t := (perm_maps tp) tid.
 
-Inductive permMapsInv : nat -> PermMap.t -> Prop :=
-| perm0 : forall (pf : 0 < num_threads), permMapsInv 0 (perm_maps tp (Ordinal pf)) 
+(*This definition is hard to use in proofs*)
+Inductive permMapsInv' : nat -> PermMap.t -> Prop :=
+| perm0 : forall (pf : 0 < num_threads), permMapsInv' 0 (perm_maps tp (Ordinal pf)) 
 | permS : forall n (pf : n < num_threads) pprev punion,
-            permMapsInv n pprev ->
+            permMapsInv' n pprev ->
             isUnionPermMaps pprev (perm_maps tp (Ordinal pf)) punion ->
-            permMapsInv (S n) punion.
-              
+            permMapsInv' (S n) punion.
+
+Import Maps.
+
+Definition permMapsInv (pmap : PermMap.t) : Prop :=
+  (forall tid0 tid0' (Htid0 : tid0 < num_threads) (Htid0' : tid0' < num_threads)
+         b ofs (pcur pmax : option permission)
+         (Htid: tid0 <> tid0'),
+    perm_union (PMap.get b (PermMap.map
+                              (getThreadPerm (Ordinal Htid0))) ofs Cur)
+               (PMap.get b (PermMap.map
+                              (getThreadPerm (Ordinal Htid0'))) ofs Cur) = Some pcur
+    /\ Mem.perm_order'' (PMap.get b (PermMap.map pmap) ofs Cur) pcur
+    /\ perm_max (PMap.get b (PermMap.map
+                               (getThreadPerm (Ordinal Htid0))) ofs Max)
+                (PMap.get b (PermMap.map
+                               (getThreadPerm (Ordinal Htid0'))) ofs Max) = pmax
+    /\ Mem.perm_order'' (PMap.get b (PermMap.map pmap) ofs Max) pmax
+    /\ exists tid'',
+         (PMap.get b (PermMap.map (perm_maps tp tid'')) ofs Cur) =
+         (PMap.get b (PermMap.map pmap) ofs Cur) /\
+         (PMap.get b (PermMap.map (perm_maps tp tid'')) ofs Max) =
+         (PMap.get b (PermMap.map pmap) ofs Max))
+  /\
+  (forall tid, ~ Coqlib.plt (PermMap.next pmap) (PermMap.next (getThreadPerm tid)))
+  /\ (forall tid b ofs,
+        (Mem.perm_order'' (PMap.get b (PermMap.map pmap) ofs Cur)
+                          (PMap.get b (PermMap.map (getThreadPerm tid)) ofs Cur))
+        /\ ( Mem.perm_order'' (PMap.get b (PermMap.map pmap) ofs Max)
+                              (PMap.get b (PermMap.map (getThreadPerm tid)) ofs Max)))
+  /\ exists tid',
+       PermMap.next pmap = PermMap.next (getThreadPerm tid').
+
 End poolDefs.
 
 Section poolLemmas.
@@ -280,12 +315,12 @@ Context {sem : Modsem.t} {next : block} (tp : ThreadPool.t sem).
 
 Import ThreadPool.
 
-Lemma gssThreadCode (tid : 'I_(num_threads tp)) c' p' : 
-  getThreadC (updThread tp tid c' p') tid = c'.
+Lemma gssThreadCode (tid : 'I_(num_threads tp)) c' p' counter' : 
+  getThreadC (updThread tp tid c' p' counter') tid = c'.
 Proof. by rewrite /getThreadC /updThread /= eq_refl. Qed.
 
-Lemma gsoThread (tid tid' : 'I_(num_threads tp)) c' p' :
-  tid' != tid -> getThreadC (updThread tp tid c' p') tid' = getThreadC tp tid'.
+Lemma gsoThread (tid tid' : 'I_(num_threads tp)) c' p' counter':
+  tid' != tid -> getThreadC (updThread tp tid c' p' counter') tid' = getThreadC tp tid'.
 Proof. by rewrite /getThreadC /updThread /=; case Heq: (tid' == tid). Qed.
 
 Lemma getAddThread c pmap tid :
@@ -299,7 +334,34 @@ Proof.
     by [].
 Qed.
 
+Definition restrPermMap (tid : 'I_(num_threads tp)) m
+           (Hinv: permMapsInv tp (getPermMap m)) : mem.
+Proof.
+  refine ({|
+             Mem.mem_contents := Mem.mem_contents m;
+             Mem.mem_access := PermMap.map (getThreadPerm tp tid);
+             Mem.nextblock := Mem.nextblock m;
+             Mem.access_max := PermMap.max (getThreadPerm tp tid);
+             Mem.nextblock_noaccess := _;
+             Mem.contents_default := Mem.contents_default m |}).
+  destruct Hinv as [_ [Hnext [Horders _]]].
+  specialize (Hnext tid). intros b ofs k Hmem_next.
+  destruct (Horders tid b ofs) as [HCur HMax].
+  assert (Hb: ~Coqlib.Plt b (PermMap.next (getPermMap m))).
+  { clear Horders HCur HMax.
+    destruct m; simpl in *; trivial. }  
+  assert (Hget: Maps.PMap.get b (PermMap.map (getPermMap m)) ofs k = None).
+  { remember (getPermMap m) as pmap eqn:Heq.
+    destruct pmap; simpl in *. clear Heq. auto. }
+  destruct k; [rewrite Hget in HMax | rewrite Hget in HCur]; subst;
+  simpl in *; match goal with
+                | [H: match ?Expr with _ => _ end |- _] => destruct Expr
+              end; tauto.
+Defined.
+ 
 End poolLemmas.
+
+Arguments restrPermMap {_} {_} tid {_} Hinv. 
 
 Inductive Handled : external_function -> Prop :=
   | HandledLock : Handled LOCK
@@ -370,351 +432,188 @@ Notation the_sem := (Modsem.sem sem).
 Notation perm_map := PermMap.t.
 
 Variable aggelos : nat -> perm_map.
-Variable schedule : nat -> nat.
 
 Section Corestep.
 
-Variable the_ge : Genv.t (Modsem.F sem) (Modsem.V sem).                
+Variable the_ge : Genv.t (Modsem.F sem) (Modsem.V sem).
     
 Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
   | step_congr : 
-      forall tp m c m' (c' : Modsem.C sem) n0,
-      let: n := counter tp in
-      let: tid0 := schedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-        let: tid := Ordinal tid0_lt_pf in
-        getThreadC tp tid = Krun c ->
-        corestepN the_sem the_ge (S n0) c m c' m' ->
-        cant_step the_sem c' ->
-        (* permMapsInv tp (num_threads tp) (getPermMap m) -> *)
-        step tp m (updThreadC tp tid (Krun c')) m'
+      forall tp tp' m m1 c m1' m' (c' : Modsem.C sem) pmap1 pnew n0,
+        let: n := counter tp in
+        forall tid0
+          (Hsched: List.hd_error (schedule tp) = Some tid0)
+          (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hthread: getThreadC tp tid = Krun c)
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (HcorestepN: corestepN the_sem the_ge (S n0) c m1 c' m1')
+            (Hcant: cant_step the_sem c')
+            (Htp': tp' = updThread tp tid (Krun c') (getPermMap m1') n)
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            step tp m tp' m'
 
-  | step_stage :
+  | step_stage : (*should I say something about invariants on permission maps?*)
       forall tp m c ef args,
-      let: n := counter tp in
-      let: tid0 := schedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Krun c ->
-      semantics.at_external the_sem c = Some (ef, ef_sig ef, args) ->
-      handled ef ->
-      (* permMapsInv tp (num_threads tp) (getPermMap m) -> *)
-      step tp m (schedNext (updThreadC tp tid (Kstage ef args c))) m
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Krun c)
+            (Hat_external: semantics.at_external the_sem c = Some (ef, ef_sig ef, args))
+            (Hhandled: handled ef),
+            step tp m (schedNext (updThreadC tp tid (Kstage ef args c))) m
 
   | step_lock :
-      forall tp tp' m c m'' c' m' b ofs pnew,
+      forall tp tp' m m1 c m1' c' m' b ofs pmap1 pnew,
       let: n := counter tp in
-      let: tid0 := schedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c ->
-      Mem.load Mint32 m b (Int.intval ofs) = Some (Vint Int.one) ->
-      Mem.store Mint32 m b (Int.intval ofs) (Vint Int.zero) = Some m'' ->
-      semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      tp' = updThread tp tid (Krun c') (aggelos n) ->
-      permMapsInv tp' (num_threads tp') pnew ->
-      updPermMap m'' pnew = Some m' -> 
-      step tp m tp' m'
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one))
+            (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m1')
+            (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
+            (Htp': tp' = updThread tp tid (Krun c') (aggelos n) (n+1))
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            step tp m tp' m'
   
   | step_unlock :
-      forall tp tp' m c m'' c' m' b ofs pnew,
+      forall tp tp' m m1 c m1' c' m' b ofs pmap1 pnew,
       let: n := counter tp in
-      let: tid0 := schedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c ->
-      Mem.load Mint32 m b (Int.intval ofs) = Some (Vint Int.zero) ->
-      Mem.store Mint32 m b (Int.intval ofs) (Vint Int.one) = Some m'' ->
-      semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      tp' = updThread tp tid (Krun c') (aggelos n) ->
-      permMapsInv tp' (num_threads tp') pnew ->
-      updPermMap m'' pnew = Some m' -> 
-      step tp m tp' m'
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero))
+            (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.one) = Some m1')
+            (Hafter_external: semantics.after_external the_sem
+                                                       (Some (Vint Int.zero)) c = Some c')
+            (Htp': tp' = updThread tp tid (Krun c') (aggelos n) (n+1))
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            step tp m tp' m'
 
   | step_create :
       forall tp tp' m m' c c' c_new vf arg pnew,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage CREATE (vf::arg::nil) c)
+            (Hinitial: semantics.initial_core the_sem the_ge vf (arg::nil) = Some c_new)
+            (Hafter_external: semantics.after_external the_sem
+                                                       (Some (Vint Int.zero)) c = Some c')
+            (Htp': tp' = schedNext (addThread (updThread tp tid (Krun c') (aggelos n) (n+2))
+                                              (Krun c_new) (aggelos (n+1))))
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m pnew = Some m'),
+            step tp m tp' m'
+
+  | step_lockfail :
+      forall tp m m1 c b ofs pmap1,
       let: n := counter tp in
-      let: tid0 := schedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Kstage CREATE (vf::arg::nil) c ->
-      semantics.initial_core the_sem the_ge vf (arg::nil) = Some c_new ->
-      semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      tp' = schedNext (addThread
-                         (updThread tp tid (Krun c') (aggelos (n+1))) (Krun c_new) (aggelos n)) ->
-      permMapsInv tp' (num_threads tp') pnew ->
-      updPermMap m pnew = Some m' -> 
-      step tp m tp' m'.
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
+            step tp m (schedNext tp) m
+                 
+  | step_unlockfail :
+      forall tp m m1 c b ofs pmap1,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one)),
+            step tp m (schedNext tp) m
+
+  | step_schedfail :
+      forall tp m,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 >= num_threads tp),
+            step tp m (schedNext tp) m.
                            
 End Corestep.
 
-Lemma step_inv the_ge tp c m tp' m' ef sig args : 
-  let: n := counter tp in
-  let: tid0 := schedule n in
-  forall (tid0_lt_pf :  tid0 < num_threads tp),
-  let: tid := Ordinal tid0_lt_pf in
-  getThreadC tp tid = Krun c ->
-  semantics.at_external the_sem c = Some (ef, sig, args) -> 
-  handled ef = false -> 
-  ~ step the_ge tp m tp' m'.
-Proof. 
-  move=> pf get Hat; move/handledP=> Hhdl step.
-  case: step pf get Hat Hhdl n. move {tp m tp' m'}.
-{ move=> ?????? pf get step cant pf'; have ->: pf' = pf by apply: proof_irr.
-  move: step=> /=; case=> x []y []? ?.
-  by rewrite get; case=> <-; erewrite corestep_not_at_external; eauto.
-}
-{ move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr.
-  rewrite get; case=> <-; rewrite Hat; case=> <- /= _ _ Contra _. 
-  by apply: Contra; apply/handledP.
-}
-{ move=> ?????????? pf get Hat ????? pf'; have ->: pf' = pf by apply: proof_irr.
-  by rewrite get.
-}
-{ move=> ?????????? pf get Hat ????? pf'; have ->: pf' = pf by apply: proof_irr.
-  by rewrite get.
-}
-{ move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr.
-  by rewrite get.
-}
-Qed.
 
 Lemma my_ltP m n : (m < n)%coq_nat -> (m < n).
 Proof. by move/ltP. Qed.
 
+
 Definition at_external (tp : thread_pool) 
   : option (external_function * signature * seq val) := 
   let: n := counter tp in
-  let: tid0 := schedule n in
-  match lt_dec tid0 (num_threads tp) with
-    | left lt_pf => 
-      let: tid := Ordinal (my_ltP lt_pf) in
-      match getThreadC tp tid with 
-        | Krun c => 
-          match semantics.at_external the_sem c with
-            | None => None
-            | Some (ef, sg, args) => 
-              if handled ef then None 
-              else Some (ef, sg, args)
-          end
-        | Kstage _ _ _ => None
-      end
-    | right _ => None
-  end.
+  @bind option _ _ _ 
+        (List.hd_error (schedule tp))
+        (fun tid0 => match lt_dec tid0 (num_threads tp) with
+                       | left lt_pf => 
+                         let: tid := Ordinal (my_ltP lt_pf) in
+                     match getThreadC tp tid with 
+                       | Krun c => 
+                         match semantics.at_external the_sem c with
+                           | None => None
+                           | Some (ef, sg, args) => 
+                if handled ef then None 
+                else Some (ef, sg, args)
+                         end
+                       | Kstage _ _ _ => None
+                     end
+                       | right _ => None
+                     end).
 
 Definition after_external (ov : option val) (tp : thread_pool) :=
   let: n := counter tp in
-  let: tid0 := schedule n in
-  match lt_dec tid0 (num_threads tp) with
-    | left lt_pf => 
-      let: tid := Ordinal (my_ltP lt_pf) in
-      match getThreadC tp tid with 
-        | Krun c => 
-          match semantics.after_external the_sem ov c with
-            | None => None
-            | Some c' => Some (schedNext (updThreadC tp tid (Krun c')))
-          end
-        | Kstage _ _ _ => None
-      end
-    | right _ => None
-  end.
-
-Definition one_pos : pos := mkPos NPeano.Nat.lt_0_1.
-
-Section InitialCore.
-
-  Variable ge : Genv.t (Modsem.F sem) (Modsem.V sem).
-
-Definition initial_core (f : val) (args : list val) : option thread_pool :=
-  match initial_core the_sem ge f args with
-    | None => None
-    | Some c => 
-      Some (ThreadPool.mk 
-              one_pos 
-              (fun tid => if tid == ord0 then Krun c 
-                          else Krun c (*bogus value; can't occur*))
-              (fun tid => if tid == ord0 then emptyPermMap 
-                          else emptyPermMap)
-              0)
-  end.
-
-End InitialCore.
-
-Definition halted (tp : thread_pool) : option val := None.
-
-Program Definition semantics :
-  CoreSemantics (Genv.t (Modsem.F sem) (Modsem.V sem)) thread_pool mem :=
-  Build_CoreSemantics _ _ _
-    initial_core
-    at_external
-    after_external
-    halted
-    step
-    _ _ _.
-Next Obligation.
-rewrite /at_external.
-case Hlt: (lt_dec _ _)=> //[a].
-case Hget: (getThreadC _ _)=> //[c].
-case Hat: (semantics.at_external _ _)=>[[[ef sg]  args]|//].
-case Hhdl: (handled _)=> //.
-elimtype False; apply: (step_inv (my_ltP a) Hget Hat Hhdl H).
-Qed.
+  @bind option _ _ _ 
+        (List.hd_error (schedule tp))
+        (fun tid0 => match lt_dec tid0 (num_threads tp) with
+                       | left lt_pf => 
+                         let: tid := Ordinal (my_ltP lt_pf) in
+                         match getThreadC tp tid with 
+                           | Krun c => 
+                             match semantics.after_external the_sem ov c with
+                               | None => None
+                               | Some c' => Some (schedNext (updThreadC tp tid (Krun c')))
+                             end
+                           | Kstage _ _ _ => None
+                         end
+                       | right _ => None
+                     end).
   
 End Concur. End Concur.
-
-(*MOVE to core/semantics_lemmas.v*)
-Lemma corestepN_fun {G C M} {sem : CoreSemantics G C M} {c m c' m' c'' m'' n ge}
-  (Hfun : corestep_fun sem) :
-  corestepN sem ge n c m c' m' ->
-  corestepN sem ge n c m c'' m'' -> 
-  c'=c'' /\ m'=m''.
-Proof.
-move: c m; elim: n=> /=.
-{ by move=> c m; case=> <- <-; case=> <- <-. }
-{ move=> n IH c m; case=> x []y []H H2 []z []w []H3 H4.
-  case: (Hfun _ _ _ _ _ _ _ H H3)=> ??; subst.
-  by case: (IH _ _ H2 H4)=> <- <-.
-}
-Qed.
-
-Lemma corestepN_fun_cant {G C M} {sem : CoreSemantics G C M} 
-      {c m c' m' c'' m'' ge}
-      {n n' : nat}
-      (Hfun : corestep_fun sem) :
-  corestepN sem ge n c m c' m' ->
-  corestepN sem ge n' c m c'' m'' -> 
-  cant_step sem c' -> 
-  cant_step sem c'' -> 
-  c'=c'' /\ m'=m''.
-Proof. 
-move=> H H2 H3 H4. 
-suff: n = n'.
-by move=> ?; subst; apply: (corestepN_fun Hfun H H2).
-elim: n n' c m H H2 H3 H4=> /=. 
-{ move=> n' c m H H2 c1 c2.
-case: n' H2=> n'; elim: n'=> //. 
-case: H=> -> -> /=; case=> ? []? []H2 _.
-by eapply cant_step_step in H2.
-{ 
-  case: H=> -> -> /= n H []c3 []m3 []H2 []c4 []m4 []H3 H4.
-  clear - c1 H2; elimtype False.
-  by eapply cant_step_step; eauto.
-}
-}
-move=> n IH n' c m []c2 []m2 []H H2 H3 H4 H5.
-case: n' H3.
-{ 
-  simpl; case=> ??; subst.
-  by elimtype False; eapply cant_step_step; eauto.
-}
-move=> n' /= []c3 []m3 []H6 H7.
-case: (Hfun _ _ _ _ _ _ _ H H6)=> ??; subst.
-by move: (IH _ _ _ H2 H7 H4 H5)=> <-.
-Qed.
-
-Section ConcurLemmas.
-
-Import ThreadPool.
-
-Context {sem : Modsem.t}.
-
-Notation thread_pool := (t sem).
-Notation the_sem := (Modsem.sem sem).
-Notation perm_map := PermMap.t.
-
-Variable aggelos : nat -> perm_map.
-Variable schedule : nat -> nat.
-
-Notation thread_sem := (@Concur.semantics sem aggelos schedule).
-
-(* Lemma thread_det : *)
-(*   semantics_lemmas.corestep_fun the_sem -> *)
-(*   semantics_lemmas.corestep_fun thread_sem. *)
-(* Proof.  *)
-(* move=> Hfun m m' m'' ge tp tp' tp''; case; move {tp tp' m m'}. *)
-(* { move=> tp m c m' c' n pf get cant step0 step. *)
-(*   case: step pf get step0 cant; move {tp tp'' m''}. *)
-(*   + move=> tp m'' c'' m''' c''' n' pf get step cant' pf'; move: get step. *)
-(*     have ->: pf' = pf by apply: proof_irr. *)
-(*     move=> -> step; case=> <- cant'' step'. *)
-(*     by case: (corestepN_fun_cant Hfun step step')=> // <- <-; split. *)
-(*   + move {m}=> tp m c'' b ofs pf get Hat Hhdl pf'. *)
-(*     have ->: pf' = pf by apply: proof_irr. *)
-(*     rewrite get; case=> <- cant step. *)
-(*     simpl in step; case: step=> ? []? []step ?. *)
-(*     by move: (corestep_not_at_external _ _ _ _ _ _ step); rewrite Hat. *)
-(*   + move {m}=> tp tp' m c'' m'' c''' m''' b ofs pnew pf get load store aft upd inv updp pf'. *)
-(*     have ->: pf' = pf by apply:proof_irr. *)
-(*     by rewrite get. *)
-(*   + move {m}=> tp tp' m c'' m'' c''' m''' b ofs pnew pf get load store aft upd inv updp pf'. *)
-(*     have ->: pf' = pf by apply:proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(* } *)
-(* { move=> tp m c b ofs pf get Hat Hhdl step;  *)
-(*   case: step pf get Hat Hhdl; move {tp m tp'' m''}. *)
-(*   + move=> ?????? pf' get step cant pf; have <-: pf' = pf by apply: proof_irr. *)
-(*     rewrite get; case=> <- H.  *)
-(*     simpl in step; case: step=> ? []? []step. *)
-(*     by erewrite corestep_not_at_external in H; eauto. *)
-(*   + move=> ????? pf' get Hat Hhdl pf; have <-: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get; case=> <-; rewrite Hat; case=> -> _ -> _; split. *)
-(*   + move=> ?????????? pf get ?????? pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ?????????? pf get ?????? pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(* } *)
-(* { move=> tp tp' m c m''' c' m' b ofs pnew pf get load store aft upd inv updp step. *)
-(*   case: step pf get upd inv updp load store; move {tp m tp'' m''}. *)
-(*   + move=> ?????? pf get step0 cant pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ?????????? pf get load store aft' upd inv updp pf'.  *)
-(*     have ->: pf' = pf by apply: proof_irr. *)
-(*     rewrite get. case=> <- <- cs_eq upd' inv' updp' load'. rewrite store; case=> mem_eq; subst. *)
-(*     by move: aft'; rewrite aft; case=> ->; move: upd'; rewrite upd; case=> ->; split. *)
-(*   + move=> tp m c'' m'' c'''' m'''' b' ofs' pf get ? store aft' upd' pf'. *)
-(*     have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ??????? pf get init aft' pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(* } *)
-(* { move=> tp m c m''' c' m' b ofs pf get load store aft upd step.  *)
-(*   case: step pf get load store aft upd; move {tp m tp'' m''}. *)
-(*   + move=> ?????? pf get step cant pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ???????? pf get load store aft upd pf'.  *)
-(*     have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ???????? pf get ? store aft upd pf'. *)
-(*     have ->: pf' = pf by apply: proof_irr. *)
-(*     rewrite get; case=> <- <- <- _; rewrite store; case=> <-. *)
-(*     by rewrite aft; case=> <-; rewrite upd; split. *)
-(*   + move=> ??????? pf get init aft pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(* } *)
-(* { move=> tp m c c' c_new vf arg pf get init aft step. *)
-(*   case: step pf get init aft; move {tp m tp'' m''}. *)
-(*   + move=> ?????? pf get ? cant pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ???????? pf get ? store aft upd pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ???????? pf get ? store aft upd pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get. *)
-(*   + move=> ??????? pf get init aft pf'; have ->: pf' = pf by apply: proof_irr. *)
-(*     by rewrite get; case=> <- <- <-; rewrite init; case=> <-; rewrite aft; case=> <-. *)
-(* }       *)
-(* Qed. *)
-
-End ConcurLemmas.
 
 Module FineConcur. Section FineConcur.
 
@@ -731,129 +630,140 @@ Variable fschedule : nat -> nat.
 
 Section Corestep.
 
-Variable the_ge : Genv.t (Modsem.F sem) (Modsem.V sem).
+  Variable the_ge : Genv.t (Modsem.F sem) (Modsem.V sem).
 
-Inductive fstep : thread_pool -> mem -> thread_pool -> mem -> Prop :=
-  | fstep_congr : 
-      forall tp m c m' (c' : Modsem.C sem),
-      let: n := counter tp in
-      let: tid0 := fschedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Krun c ->
-      corestep the_sem the_ge c m c' m' ->
-      fstep tp m (schedNext (updThreadC tp tid (Krun c'))) m'
+  Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
+  | fstep_core : 
+      forall tp tp' m m1 c m1' m' (c' : Modsem.C sem) pmap1 pnew,
+        let: n := counter tp in
+        forall tid0
+          (Hsched: List.hd_error (schedule tp) = Some tid0)
+          (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hthread: getThreadC tp tid = Krun c)
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hcorestep: corestep the_sem the_ge c m1 c' m1')
+            (Htp': tp' = schedNext (updThread tp tid (Krun c') (getPermMap m1') n))
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            step tp m tp' m'
 
-  | fstep_stage :
+  | fstep_stage : (*should I say something about invariants on permission maps?*)
       forall tp m c ef args,
-      let: n := counter tp in
-      let: tid0 := fschedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Krun c ->
-      semantics.at_external the_sem c = Some (ef, ef_sig ef, args) ->
-      handled ef ->
-      fstep tp m (schedNext (updThreadC tp tid (Kstage ef args c))) m
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Krun c)
+            (Hat_external: semantics.at_external the_sem c = Some (ef, ef_sig ef, args))
+            (Hhandled: handled ef),
+            step tp m (schedNext (updThreadC tp tid (Kstage ef args c))) m
 
   | fstep_lock :
-      forall tp tp' m c m'' c' m' b ofs pnew,
+      forall tp tp' m m1 c m1' c' m' b ofs pmap1 pnew,
       let: n := counter tp in
-      let: tid0 := fschedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c ->
-      Mem.load Mint32 m b (Int.intval ofs) = Some (Vint Int.one) ->
-      Mem.store Mint32 m b (Int.intval ofs) (Vint Int.zero) = Some m'' ->
-      semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      tp' = updThread tp tid (Krun c') (aggelos n) ->
-      permMapsInv tp' (num_threads tp') pnew ->
-      updPermMap m'' pnew = Some m' -> 
-      fstep tp m tp' m'
-
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one))
+            (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m1')
+            (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
+            (Htp': tp' = schedNext (updThread tp tid (Krun c') (aggelos n) (n+1)))
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            step tp m tp' m'
+  
   | fstep_unlock :
-      forall tp tp' m c m'' c' m' b ofs pnew,
+      forall tp tp' m m1 c m1' c' m' b ofs pmap1 pnew,
       let: n := counter tp in
-      let: tid0 := fschedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c ->
-      Mem.load Mint32 m b (Int.intval ofs) = Some (Vint Int.zero) ->
-      Mem.store Mint32 m b (Int.intval ofs) (Vint Int.one) = Some m'' ->
-      semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      tp' = updThread tp tid (Krun c') (aggelos n) ->
-      permMapsInv tp' (num_threads tp') pnew ->
-      updPermMap m'' pnew = Some m' -> 
-      fstep tp m tp' m'
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero))
+            (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.one) = Some m1')
+            (Hafter_external: semantics.after_external the_sem
+                                                       (Some (Vint Int.zero)) c = Some c')
+            (Htp': tp' = schedNext (updThread tp tid (Krun c') (aggelos n) (n+1)))
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            step tp m tp' m'
 
   | fstep_create :
       forall tp tp' m m' c c' c_new vf arg pnew,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage CREATE (vf::arg::nil) c)
+            (Hinitial: semantics.initial_core the_sem the_ge vf (arg::nil) = Some c_new)
+            (Hafter_external: semantics.after_external the_sem
+                                                       (Some (Vint Int.zero)) c = Some c')
+            (Htp': tp' = schedNext (addThread (updThread tp tid (Krun c') (aggelos n) (n+2))
+                                              (Krun c_new) (aggelos (n+1))))
+            (Hinv': permMapsInv tp' pnew)
+            (Hupd_mem: updPermMap m pnew = Some m'),
+            step tp m tp' m'
+
+                   | step_lockfail :
+      forall tp m m1 c b ofs pmap1,
       let: n := counter tp in
-      let: tid0 := fschedule n in
-      forall (tid0_lt_pf :  tid0 < num_threads tp),
-      let: tid := Ordinal tid0_lt_pf in
-      getThreadC tp tid = Kstage CREATE (vf::arg::nil) c ->
-      semantics.initial_core the_sem the_ge vf (arg::nil) = Some c_new ->
-      semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c' ->
-      tp' = schedNext (addThread
-                         (updThread tp tid (Krun c') (aggelos (n+1)))
-                         (Krun c_new) (aggelos n)) ->
-      permMapsInv tp' (num_threads tp') pnew ->
-      updPermMap m pnew = Some m' -> 
-      fstep tp m tp' m'.
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
+            step tp m (schedNext tp) m
+                 
+  | fstep_unlockfail :
+      forall tp m m1 c b ofs pmap1,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 < num_threads tp),
+          let: tid := Ordinal Htid0_lt_pf in
+          forall
+            (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
+            (Hinv: permMapsInv tp (getPermMap m))
+            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one)),
+            step tp m (schedNext tp) m
+
+  | fstep_schedfail :
+      forall tp m,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf :  tid0 >= num_threads tp),
+            step tp m (schedNext tp) m.
+                 
 
 End Corestep.
 
-Lemma fstep_inv the_ge tp c m tp' m' ef sig args : 
-  let: n := counter tp in
-  let: tid0 := fschedule n in
-  forall (tid0_lt_pf :  tid0 < num_threads tp),
-  let: tid := Ordinal tid0_lt_pf in
-  getThreadC tp tid = Krun c ->
-  semantics.at_external the_sem c = Some (ef, sig, args) -> 
-  handled ef = false -> 
-  ~ fstep the_ge tp m tp' m'.
-Proof. 
-move=> pf get Hat; move/handledP=> Hhdl step. 
-case: step pf get Hat Hhdl n; move {tp m tp' m'}.
-{ move=> ????? pf get step pf'; have ->: pf' = pf by apply: proof_irr.
-  intros get0 at_ext handl. rewrite get in get0. inversion get0; subst.
-  
-   erewrite corestep_not_at_external in at_ext; eauto. discriminate.
-}
-{ move=> ????? pf get Hat Hhdl pf'; have ->: pf' = pf by apply: proof_irr.
-  rewrite get; case=> <-; rewrite Hat; case=> <- /= _ _ Contra _. 
-  by apply: Contra; apply/handledP.
-}
-{ move=> ?????????? pf get Hat ????? pf'; have ->: pf' = pf by apply: proof_irr.
-  by rewrite get.
-}
-{ move=> ?????????? pf get Hat ????? pf'; have ->: pf' = pf by apply: proof_irr.
-  by rewrite get.
-}
-{ move=> ?????????? pf get init aft ??? pf'; have ->: pf' = pf by apply: proof_irr.
-  by rewrite get.
-}
-Qed.
-
-Import Concur.
-Program Definition semantics :
-  CoreSemantics (Genv.t (Modsem.F sem) (Modsem.V sem)) thread_pool mem :=
-  Build_CoreSemantics _ _ _
-    Concur.initial_core 
-    (Concur.at_external fschedule)
-    (Concur.after_external fschedule)
-    Concur.halted
-    fstep
-    _ _ _.
-Next Obligation.
-rewrite /at_external.
-case Hlt: (lt_dec _ _)=> //[a].
-case Hget: (getThreadC _ _)=> //[c].
-case Hat: (semantics.at_external _ _)=>[[[ef sg]  args]|//].
-case Hhdl: (handled _)=> //.
-elimtype False; apply: (fstep_inv (my_ltP a) Hget Hat Hhdl H).
-Qed.
-  
 End FineConcur.
 End FineConcur.
 

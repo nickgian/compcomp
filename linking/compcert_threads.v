@@ -423,7 +423,7 @@ Qed.
 
 (* This is the same as Mem.load but does not obey the permissions map. It is intented
 to be used for locks only. *)
-Definition load_unafe (chunk : memory_chunk) (m : mem) (b : block) (ofs : Z) :=
+Definition load_unsafe (chunk : memory_chunk) (m : mem) (b : block) (ofs : Z) :=
    decode_val chunk
               (Mem.getN (size_chunk_nat chunk) ofs
                         (Maps.PMap.get b (Mem.mem_contents m))).
@@ -546,7 +546,7 @@ Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
             (Hinv: permMapsInv tp (getPermMap m))
             (Hpmap: getThreadPerm tp tid = pmap1)
             (Hrestrict_pmap: restrPermMap tid Hinv = m1)
-            (Htest: load_unafe Mint32 m1 b (Int.intval ofs) = Vint Int.zero),
+            (Htest: load_unsafe Mint32 m1 b (Int.intval ofs) = Vint Int.zero),
             step tp m (schedNext tp) m
                  
   | step_schedfail :
@@ -721,7 +721,7 @@ Section Corestep.
           (Hinv: permMapsInv tp (getPermMap m))
           (Hpmap: getThreadPerm tp tid = pmap1)
           (Hrestrict_pmap: restrPermMap tid Hinv = m1)
-          (Htest: load_unafe Mint32 m1 b (Int.intval ofs) = Vint Int.zero),
+          (Htest: load_unsafe Mint32 m1 b (Int.intval ofs) = Vint Int.zero),
           step tp m (schedNext tp) m
                
   | fstep_schedfail :

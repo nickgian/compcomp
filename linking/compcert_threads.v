@@ -530,12 +530,10 @@ Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
             step tp m tp' m'
 
   | step_lockfail :
-      forall tp m m1 c b ofs pmap1,
-      let: n := counter tp in
-        forall tid0
-               (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 < num_threads tp),
-          let: tid := Ordinal Htid0_lt_pf in
+      forall tp m m1 c b ofs pmap1 tid0
+             (Hsched: List.hd_error (schedule tp) = Some tid0)
+             (Htid0_lt_pf :  tid0 < num_threads tp),
+        let: tid := Ordinal Htid0_lt_pf in
           forall
             (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
             (Hinv: permMapsInv tp (getPermMap m))
@@ -545,27 +543,23 @@ Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
             step tp m (schedNext tp) m
                  
   | step_unlockfail :
-      forall tp m m1 c b ofs pmap1,
-        let: n := counter tp in
-        forall tid0
-               (Hsched: List.hd_error (schedule tp) = Some tid0)
+      forall tp m m1 c b ofs pmap1 tid0
+             (Hsched: List.hd_error (schedule tp) = Some tid0)
                (Htid0_lt_pf :  tid0 < num_threads tp),
-          let: tid := Ordinal Htid0_lt_pf in
-          forall
-            (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
-            (Hinv: permMapsInv tp (getPermMap m))
-            (Hpmap: getThreadPerm tp tid = pmap1)
-            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
-            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one)),
-            step tp m (schedNext tp) m
-
+        let: tid := Ordinal Htid0_lt_pf in
+        forall
+          (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
+          (Hinv: permMapsInv tp (getPermMap m))
+          (Hpmap: getThreadPerm tp tid = pmap1)
+          (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+          (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one)),
+          step tp m (schedNext tp) m
+                 
   | step_schedfail :
-      forall tp m,
-        let: n := counter tp in
-        forall tid0
-               (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 >= num_threads tp),
-            step tp m (schedNext tp) m.
+      forall tp m tid0
+             (Hsched: List.hd_error (schedule tp) = Some tid0)
+             (Htid0_lt_pf :  tid0 >= num_threads tp),
+        step tp m (schedNext tp) m.
                            
 End Corestep.
 
@@ -723,43 +717,37 @@ Section Corestep.
             (Hupd_mem: updPermMap m pnew = Some m'),
             step tp m tp' m'
 
-                   | step_lockfail :
-      forall tp m m1 c b ofs pmap1,
-      let: n := counter tp in
-        forall tid0
-               (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 < num_threads tp),
-          let: tid := Ordinal Htid0_lt_pf in
-          forall
-            (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
-            (Hinv: permMapsInv tp (getPermMap m))
-            (Hpmap: getThreadPerm tp tid = pmap1)
-            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
-            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
-            step tp m (schedNext tp) m
-                 
+  | step_lockfail :
+      forall tp m m1 c b ofs pmap1 tid0
+             (Hsched: List.hd_error (schedule tp) = Some tid0)
+             (Htid0_lt_pf :  tid0 < num_threads tp),
+        let: tid := Ordinal Htid0_lt_pf in
+        forall
+          (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
+          (Hinv: permMapsInv tp (getPermMap m))
+          (Hpmap: getThreadPerm tp tid = pmap1)
+          (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+          (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
+          step tp m (schedNext tp) m
+               
   | fstep_unlockfail :
-      forall tp m m1 c b ofs pmap1,
-        let: n := counter tp in
-        forall tid0
-               (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 < num_threads tp),
-          let: tid := Ordinal Htid0_lt_pf in
-          forall
-            (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
-            (Hinv: permMapsInv tp (getPermMap m))
-            (Hpmap: getThreadPerm tp tid = pmap1)
-            (Hrestrict_pmap: restrPermMap tid Hinv = m1)
-            (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one)),
-            step tp m (schedNext tp) m
-
+      forall tp m m1 c b ofs pmap1 tid0
+             (Hsched: List.hd_error (schedule tp) = Some tid0)
+             (Htid0_lt_pf :  tid0 < num_threads tp),
+        let: tid := Ordinal Htid0_lt_pf in
+        forall
+          (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
+          (Hinv: permMapsInv tp (getPermMap m))
+          (Hpmap: getThreadPerm tp tid = pmap1)
+          (Hrestrict_pmap: restrPermMap tid Hinv = m1)
+          (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one)),
+          step tp m (schedNext tp) m
+               
   | fstep_schedfail :
-      forall tp m,
-        let: n := counter tp in
-        forall tid0
-               (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 >= num_threads tp),
-            step tp m (schedNext tp) m.
+      forall tp m tid0
+             (Hsched: List.hd_error (schedule tp) = Some tid0)
+             (Htid0_lt_pf :  tid0 >= num_threads tp),
+        step tp m (schedNext tp) m.
                  
 
 End Corestep.

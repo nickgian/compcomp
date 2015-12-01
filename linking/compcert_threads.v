@@ -1026,6 +1026,12 @@ Section PermMapConstruction.
          subst. constructor. assumption. }
      Defined.
 
+     Lemma threadSeq_size_pos : forall n l (Hseq: threadSeq n l),
+                              size l > 0.
+     Proof.
+       intros. inversion Hseq; simpl; auto.
+     Defined.
+
      Lemma threadSeq_val : forall n x l (Hl: threadSeq n (x :: l)),
                              n = nat_of_ord x.
      Proof.
@@ -1071,13 +1077,24 @@ Section PermMapConstruction.
        eapply IHl; eassumption.
      Defined.
 
-     Lemma subSeq_cons : forall {T:Type} x (s' s : seq T) (Hneq: s' <> x :: s)
+     Lemma drop_size_lt : forall {T : Type} (s s' : seq T) n
+                                 (Hdrop: drop n s = s'),
+                            size s >= size s'.
+     Proof.
+       intros T s. induction s; intros.
+       destruct n; simpl in Hdrop; rewrite <- Hdrop; auto.
+       simpl in *. destruct n. rewrite <- Hdrop. auto.
+       eapply IHs in Hdrop. ssromega.
+     Defined.
+
+     Lemma subSeq_cons : forall {T:eqType} x (s' s : seq T) (Hneq: s' <> x :: s)
                                 (Hsub: subSeq s' (x :: s)), subSeq s' s.
      Proof.
        unfold subSeq. intros.
-       destruct Hsub as [n Hdrop].
-       destruct n. simpl in Hdrop. exfalso; auto.
-       simpl in Hdrop. exists n. assumption.
+       simpl in Hsub. destruct ((size s).+1 - size s') eqn:Hn.
+       exfalso; move/eqP:Hsub=>Hsub. auto.
+       replace (size s - size s') with n by ssromega.
+       assumption.
      Defined.
       
      Lemma threadSeq_size : forall i l (Hseq: threadSeq i l), size l = ((n num_threads) - i).
@@ -1097,27 +1114,28 @@ Section PermMapConstruction.
      Proof.
        intros. generalize dependent l'. generalize dependent i.
        induction l; intros.
-       destruct Hsub as [? Hcontra]. simpl in Hcontra. exfalso; auto.
+       unfold subSeq in Hsub. simpl in Hsub. exfalso. move/eqP:Hsub. auto.
        inversion Hseq as [|? ? ? Hseq']; subst.
-       - simpl in *. destruct Hsub as [i Hdrop].
-         destruct i. simpl in Hdrop. rewrite <- Hdrop.
-         simpl. constructor. simpl in Hdrop. exfalso; auto.
-       - destruct Hsub as [j Hdrop].
-         destruct j as [|j']. simpl in Hdrop. rewrite <- Hdrop.
-         simpl. erewrite threadSeq_size; eauto.
+       - simpl in *.
+         unfold subSeq in Hsub. simpl in Hsub.
+         destruct (1- size l') as [|n] eqn:Hn. move/eqP:Hsub=>Hsub.
+         rewrite <- Hsub. simpl. constructor.
+         exfalso; move/eqP:Hsub=>Hsub; auto.
+       - unfold subSeq in Hsub. move/eqP:Hsub=>Hsub.
+         simpl in Hsub.
+         destruct ((size l).+1 - size l') as [|n] eqn:Hn;
+         rewrite Hn in Hsub.
+         rewrite <- Hsub; simpl.
+         erewrite threadSeq_size; eauto.
          replace (num_threads - (num_threads - i.+1).+1) with i by
-             (clear Hdrop Hseq Hseq' IHl; destruct num_threads; simpl in *; ssromega).
+             (clear Hsub Hseq Hseq' IHl; destruct num_threads; simpl in *; ssromega).
          assumption.
-         simpl in Hdrop.
          eapply IHl; eauto.
-         exists j'. assumption.
+         unfold subSeq.
+         assert (Heq: size l - size l' = n)
+           by (destruct l'; simpl in *; ssromega).
+         rewrite Heq. by move/eqP:Hsub.
      Defined.
-
-     Lemma threadsList_det : forall lhd tid tid' ltl
-                                    (Hlst: sval threadsList = lhd ++ tid :: ltl)
-                                    (Hlst': sval threadsList = lhd ++ tid' :: ltl),
-                               tid = tid'.
-     Admitted.
 
      (* For the constructive version we assumed that all perm maps are canonical *)
      Hypothesis permMapsCanonical :
@@ -1132,26 +1150,6 @@ Section PermMapConstruction.
          | [ |- context[match ?Expr with | _ => _ end]] => destruct Expr
        end; eexists; reflexivity.
      Defined.
-
-     Definition permMapsUnion : list 'I_num_threads.
-       refine (let fix aux l
-                       acc
-                       (Hsub: subSeq l (sval threadsList)) {struct l}
-                   :=
-                   match l with
-                     | nil => fun Heq =>
-                                acc
-                     | tid :: l' =>
-                       fun (Heq: tid :: l' = l) =>
-                         aux l' (tid :: acc) _
-                   end (Logic.eq_refl l)
-               in aux (sval threadsList) nil _).
-       Proof.
-         destruct Hsub as [j Hdrop].
-         rewrite <- Heq in Hdrop.
-         apply dropS in Hdrop. exists (S j). assumption.
-         exists 0. apply drop0.
-       Defined.
      
      Definition permMapsUnion : {p : PermMap.t | True}.
        refine (let fix aux l

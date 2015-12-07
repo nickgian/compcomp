@@ -160,7 +160,7 @@ Section permMapDefs.
     intros. destruct p1 as [p1|];
       destruct p2 as [p2|];
     try destruct p1, p2; simpl in *; reflexivity.
-  Qed.
+  Defined.
 
   Lemma perm_union_result : forall p1 p2 pu (Hunion: perm_union p1 p2 = Some pu),
                               pu = p1 \/ pu = p2.
@@ -168,7 +168,15 @@ Section permMapDefs.
     intros. destruct p1 as [p1|]; destruct p2 as [p2|];
             try destruct p1, p2; simpl in Hunion; try discriminate;
             try inversion Hunion; subst; auto.
-  Qed.
+  Defined.
+
+  Lemma perm_union_ord : forall p1 p2 pu (Hunion: perm_union p1 p2 = Some pu),
+                           Mem.perm_order'' pu p1 /\ Mem.perm_order'' pu p2.
+  Proof.
+    intros. destruct p1 as [p1|]; destruct p2 as [p2|];
+            try destruct p1, p2; simpl in Hunion; try discriminate;
+            try inversion Hunion; subst; unfold Mem.perm_order''; split; constructor.
+  Defined.
     
   Definition perm_max (p1 p2 : option permission) : option permission :=
     match p1,p2 with
@@ -190,7 +198,15 @@ Section permMapDefs.
     intros. destruct p1 as [p1|];
       destruct p2 as [p2|];
     try destruct p1, p2; simpl in *; reflexivity.
-  Qed.
+  Defined.
+
+  Lemma perm_max_result : forall p1 p2 pu (Hmax: perm_max p1 p2 = pu),
+                            pu = p1 \/ pu = p2.
+  Proof.
+    intros. destruct p1 as [p1|]; destruct p2 as [p2|];
+            try destruct p1, p2; simpl in Hmax; try rewrite Hmax; auto.
+    destruct p1; auto. destruct p2; auto.
+  Defined.
 
   Lemma permOrd_monotonic :
     forall p1c p1m p2c p2m pu
@@ -465,12 +481,10 @@ Inductive permMapsInv' : nat -> PermMap.t -> Prop :=
 Import Maps.
 
 Definition permMapsInv (pmap : PermMap.t) : Prop :=
-  (forall tid, ~ Coqlib.plt (PermMap.next pmap) (PermMap.next (getThreadPerm tid)))
+  (forall tid, ~ Coqlib.Plt (PermMap.next pmap) (PermMap.next (getThreadPerm tid)))
   /\ (forall tid b ofs,
-        (Mem.perm_order'' (PMap.get b (PermMap.map pmap) ofs Cur)
+        Mem.perm_order'' (PMap.get b (PermMap.map pmap) ofs Cur)
                           (PMap.get b (PermMap.map (getThreadPerm tid)) ofs Cur))
-        /\ (Mem.perm_order'' (PMap.get b (PermMap.map pmap) ofs Max)
-                             (PMap.get b (PermMap.map (getThreadPerm tid)) ofs Max)))
   /\ (exists tid,
         PermMap.next pmap = PermMap.next (getThreadPerm tid))
   /\ (forall ofs b,
@@ -918,8 +932,72 @@ Section PermMapConstruction.
        | [H: perm_union ?Expr1 ?Expr2 = _ |- _] =>
          destruct (perm_union_result Expr1 Expr2 H) as [? | ?]; subst; rewrite H 
      end; auto. rewrite Hcanonical1. auto. reflexivity.
-   Qed.
+   Defined.
 
+   Lemma pmap_union_result_union :
+     forall pmap1 pmap2 pmap12
+            (Hcanonical1: fst (PermMap.map pmap1) = fun _ _ => None)
+            (Hcanonical2: fst (PermMap.map pmap2) = fun _ _ => None)
+            (Hdisjoint : ThreadPool.permMapsDisjoint pmap1 pmap2) 
+            (Hunion: pmap_union Hcanonical1 Hcanonical2 Hdisjoint = pmap12)
+            b ofs,
+       Some (PMap.get b (PermMap.map pmap12) ofs Cur) =
+       perm_union ((PermMap.map pmap1) !! b ofs Cur) ((PermMap.map pmap2) !! b ofs Cur). 
+   Proof.
+     intros. unfold pmap_union in Hunion.
+     rewrite <- Hunion. simpl. clear Hunion.  destruct (Hdisjoint b ofs) as [pu Hpu].
+     unfold PMap.get in *. simpl. rewrite PTree.gcombine.
+     destruct ((PermMap.map pmap1).2 ! b) as [f1|] eqn:Hget1;
+       destruct ((PermMap.map pmap2).2 ! b) as [f2|] eqn:Hget2;
+     try match goal with
+       | [H: perm_union ?Expr1 ?Expr2 = _ |- _] =>
+         destruct (perm_union_result Expr1 Expr2 H) as [? | ?]; subst; rewrite H 
+         end; auto. rewrite Hcanonical1. reflexivity. rewrite Hcanonical2.  reflexivity.
+     reflexivity.
+   Defined.
+
+   Lemma pmap_union_result_max :
+     forall pmap1 pmap2 pmap12
+            (Hcanonical1: fst (PermMap.map pmap1) = fun _ _ => None)
+            (Hcanonical2: fst (PermMap.map pmap2) = fun _ _ => None)
+            (Hdisjoint : ThreadPool.permMapsDisjoint pmap1 pmap2) 
+            (Hunion: pmap_union Hcanonical1 Hcanonical2 Hdisjoint = pmap12)
+            b ofs,
+       PMap.get b (PermMap.map pmap12) ofs Max =
+       perm_max ((PermMap.map pmap1) !! b ofs Max) ((PermMap.map pmap2) !! b ofs Max). 
+   Proof.
+     intros. unfold pmap_union in Hunion.
+     rewrite <- Hunion. simpl. clear Hunion.  destruct (Hdisjoint b ofs) as [pu Hpu].
+     unfold PMap.get in *. simpl. rewrite PTree.gcombine.
+     destruct ((PermMap.map pmap1).2 ! b) as [f1|] eqn:Hget1;
+       destruct ((PermMap.map pmap2).2 ! b) as [f2|] eqn:Hget2;
+     try match goal with
+       | [H: perm_union ?Expr1 ?Expr2 = _ |- _] =>
+         destruct (perm_union_result Expr1 Expr2 H) as [? | ?]; subst; rewrite H 
+         end; auto. rewrite Hcanonical1 Hcanonical2. reflexivity. reflexivity.
+   Defined.
+
+   Lemma pmap_union_ord :
+     forall pmap1 pmap2 pmap12
+            (Hcanonical1: fst (PermMap.map pmap1) = fun _ _ => None)
+            (Hcanonical2: fst (PermMap.map pmap2) = fun _ _ => None)
+            (Hdisjoint : ThreadPool.permMapsDisjoint pmap1 pmap2) 
+            (Hunion: pmap_union Hcanonical1 Hcanonical2 Hdisjoint = pmap12)
+            b ofs,
+       Mem.perm_order'' (PMap.get b (PermMap.map pmap12) ofs Cur)
+                        (PMap.get b (PermMap.map pmap1) ofs Cur) /\
+       Mem.perm_order'' (PMap.get b (PermMap.map pmap12) ofs Cur)
+                        (PMap.get b (PermMap.map pmap2) ofs Cur).
+   Proof.
+     intros. unfold pmap_union in Hunion.
+     rewrite <- Hunion. simpl. clear Hunion.  destruct (Hdisjoint b ofs) as [pu Hpu].
+     unfold PMap.get in *. simpl. rewrite PTree.gcombine.
+     destruct ((PermMap.map pmap1).2 ! b) as [f1|] eqn:Hget1;
+       destruct ((PermMap.map pmap2).2 ! b) as [f2|] eqn:Hget2; try rewrite Hpu;
+       try eapply perm_union_ord; eauto. rewrite Hcanonical1 Hcanonical2.
+     reflexivity. reflexivity.
+   Defined.
+   
    Lemma pmap_union_canonical :
      forall pmap1 pmap2 pmap12
             (Hcanonical1: fst (PermMap.map pmap1) = fun _ _ => None)
@@ -1063,7 +1141,29 @@ Section PermMapConstruction.
          constructor. eapply IHl'; eauto.
          constructor. unfold ord_lt. rewrite <- Hseq. simpl. ssromega.
      Defined.
-       
+
+     Lemma leq_pf_irr : forall n m (H1 : n < m) (H2: n < m), H1 = H2.
+     Proof.
+       intros. eapply Eqdep_dec.eq_proofs_unicity; intros x y; destruct x,y; auto.
+     Defined.
+     
+     Lemma threadSeq_complete : forall tid i l (Hl: threadSeq i l) (Hle: i <= tid)
+                                       (Hmax: tid <= num_threads -1),
+                                exists (pf': tid < num_threads), List.In (Ordinal pf') l.
+     Proof.
+       intros tid i l. generalize dependent tid. generalize dependent i.
+       induction l.
+       - intros. inversion Hl.
+       - intros. inversion Hl; subst.
+         assert (H: tid = num_threads -1) by ssromega.
+         rewrite H. exists pf. left. reflexivity.
+         rewrite leq_eqVlt in Hle.
+         move/orP:Hle=>[Heq | Hlt].
+         + move/eqP:Heq=>Heq. subst. exists pf. left; auto.
+         + specialize (IHl _ _ Hseq Hlt Hmax). destruct IHl as [pf' HIn].
+           exists pf'. right. assumption.
+     Defined.
+         
      Definition subSeq {T:eqType} (s1 s2 : seq T) :=
        drop ((size s2)-(size s1)) s2 == s1.
      
@@ -1137,6 +1237,23 @@ Section PermMapConstruction.
          rewrite Heq. by move/eqP:Hsub.
      Defined.
 
+     Lemma subSeq_det : forall {T:eqType} (s s' s'' : seq T) (Hsize: size s' = size s'')
+                               (Hsub': subSeq s' s) (Hsub'': subSeq s'' s),
+                          s' = s''.
+     Proof.
+       intros T s. induction s; intros.
+       - unfold subSeq in *. simpl in *. move/eqP:Hsub'=>Hsub'. subst. move/eqP:Hsub''; auto.
+       - unfold subSeq in Hsub', Hsub''. simpl in Hsub', Hsub''.
+         rewrite Hsize in Hsub'.
+         destruct ((size s).+1 - size s'') eqn:Heq.
+         move/eqP:Hsub''. move/eqP:Hsub'. intros. destruct s'; inversion Hsub'; subst.
+         reflexivity.
+         apply IHs. assumption.
+         unfold subSeq.
+         by replace n with (size s - size s') in Hsub' by ssromega.
+           by replace n with (size s - size s'') in Hsub'' by ssromega.
+     Defined.
+
      (* For the constructive version we assumed that all perm maps are canonical *)
      Hypothesis permMapsCanonical :
        forall tid, (PermMap.map (perm_maps tp tid)).1 = fun _ _ => None.                                   
@@ -1150,202 +1267,355 @@ Section PermMapConstruction.
          | [ |- context[match ?Expr with | _ => _ end]] => destruct Expr
        end; eexists; reflexivity.
      Defined.
-     
-     Definition permMapsUnion : {p : PermMap.t | True}.
+
+     Lemma in_rcons : forall {T:Type} x y (s : seq T) (HIn: List.In x (rcons s y)),
+                        x = y \/ List.In x s.
+     Proof.
+       intros. induction s.
+       - simpl in HIn. destruct HIn; auto.
+         simpl in HIn. destruct HIn as [|HIn]; subst.
+         right. simpl. left. reflexivity.
+         apply IHs in HIn. destruct HIn; subst; auto.
+         right. simpl. auto.
+     Defined.
+
+     Lemma in_rcons_refl : forall {T:Type} x (s : seq T),
+                             List.In x (rcons s x).
+     Proof.
+       intros. induction s. simpl. by left.
+       simpl. by right.
+     Defined.
+
+     Lemma in_rcons_weaken:
+       forall {T:Type} x y (s : seq T) (HIn: List.In x s),
+         List.In x (rcons s y).
+     Proof.
+       intros. induction s.
+       - inversion HIn.
+       - inversion HIn; subst. simpl. by left.
+         simpl. right. auto.
+     Defined.
+                             
+     Definition permMapsUnion : {p : PermMap.t | permMapsInv tp p}.
        refine (let fix aux l
                        acc (Hl': forall x, List.In x l -> permMapsDisjoint (perm_maps tp x) acc)
                        (Hacc: (PermMap.map acc).1 = fun _ _ => None)
-                       (Hsub: subSeq l (sval threadsList)) {struct l}
+                       (Hsub: subSeq l (tag threadsList))
+                       (Hnext: forall x lhd (Hlst: (tag threadsList) = lhd ++ l)
+                                      (HIn: List.In x lhd),
+                                 ~ Coqlib.Plt (PermMap.next acc) (PermMap.next (getThreadPerm tp x)))
+                       (Hperm_ord: forall tid b ofs lhd (Hlst: (tag threadsList) = lhd ++ l)
+                               (HIn: List.In tid lhd),
+                          Mem.perm_order'' ((PermMap.map acc) !! b ofs Cur)
+                                           ((PermMap.map (getThreadPerm tp tid)) !! b ofs Cur))
+                       (Hinit: tag threadsList = l -> acc = emptyPermMap)
+                       (Hinv_eq: forall lhd (Hlhd: lhd <> [::]) (Hlst: (tag threadsList) = lhd ++ l),
+                                  (exists tid, List.In tid lhd /\
+                                               PermMap.next acc = PermMap.next (getThreadPerm tp tid))
+                                  /\ (forall (ofs : Z) (b : positive),
+                                      exists tid : 'I_num_threads, List.In tid lhd /\
+                                        (PermMap.map (perm_maps tp tid)) !! b ofs Cur =
+                                        (PermMap.map acc) !! b ofs Cur)
+                                  /\ (forall (ofs : Z) (b : positive),
+                                      exists tid : 'I_num_threads, List.In tid lhd /\
+                                        (PermMap.map (perm_maps tp tid)) !! b ofs Max =
+                                        (PermMap.map acc) !! b ofs Max))
                    :=
                    match l with
                      | nil => fun Heq =>
-                                exist (fun p => True) acc _
+                                  exist (fun p => permMapsInv tp p) acc _
                      | tid :: l' =>
                        fun (Heq: tid :: l' = l) =>
                          let p := perm_maps tp tid in
                          aux l'
                              (@pmap_union p acc (permMapsCanonical tid)
-                                          Hacc (Hl' tid (permMapsUnion_oblig1 Heq))) _ _ _
+                                          Hacc (Hl' tid (permMapsUnion_oblig1 Heq))) _ _ _ _ _ _ _
                    end (Logic.eq_refl l)
-               in aux (sval threadsList) emptyPermMap _ _ _).
-       Proof. constructor.
+               in aux (tag threadsList) emptyPermMap _ _ _ _ _ _ _).
+       Proof.
+         { (* permMapsInv *)
+           clear aux. subst. split; [idtac | split].
+           - intros.
+             destruct tid as [tid pf].
+             destruct threadsList as [l Hl].
+             assert (Hle: 0 <= tid) by ssromega.
+             assert (Hmax: tid <= num_threads - 1) by ssromega.
+             destruct (threadSeq_complete tid Hl Hle Hmax) as [pf' HIn].
+             simpl in Hnext.
+             specialize (Hnext (Ordinal pf') l).
+             rewrite cats0 in Hnext. specialize (Hnext (Logic.eq_refl l) HIn).
+             intros Hcontra.
+             assert (Hget: getThreadPerm tp (Ordinal (n:=num_threads) (m:=tid) pf') =
+                           getThreadPerm tp (Ordinal (n:=num_threads) (m:=tid) pf)).
+             {
+               unfold getThreadPerm.
+               rewrite (leq_pf_irr _ _ pf pf'). reflexivity. }
+             rewrite Hget in Hnext. apply Hnext. assumption. 
+           - intros.
+             destruct tid as [tid pf].
+             destruct threadsList as [l Hl].
+             assert (Hle: 0 <= tid) by ssromega.
+             assert (Hmax: tid <= num_threads - 1) by ssromega.
+             destruct (threadSeq_complete tid Hl Hle Hmax) as [pf' HIn].
+             simpl in Hnext.
+             specialize (Hperm_ord (Ordinal pf') b ofs l).
+             rewrite cats0 in Hperm_ord. specialize (Hperm_ord (Logic.eq_refl l) HIn).
+             assert (Hget: getThreadPerm tp (Ordinal (n:=num_threads) (m:=tid) pf') =
+                           getThreadPerm tp (Ordinal (n:=num_threads) (m:=tid) pf)).
+             {
+               unfold getThreadPerm.
+               rewrite (leq_pf_irr _ _ pf pf'). reflexivity. }
+             rewrite Hget in Hperm_ord.  assumption.
+           - clear Hnext Hperm_ord. specialize (Hinv_eq (tag threadsList)).
+             destruct (threadsList) as [l Hl]. simpl in *.
+             assert (Hempty: l <> [::]) by (inversion Hl; intro Hcontra; discriminate).
+             rewrite cats0 in Hinv_eq.
+             destruct (Hinv_eq Hempty (Logic.eq_refl _)) as [Hnext [Hcur Hmax]]; clear Hinv_eq.
+             split; [idtac | split].
+             + clear Hcur Hmax. destruct Hnext as [tid [Hin Hnext]].
+               exists tid. assumption.
+             + intros ofs b. destruct (Hcur ofs b) as [tid [_ ?]].
+               eexists; eassumption.
+             + intros ofs b. destruct (Hmax ofs b) as [tid [_ ?]].
+               eexists; eassumption.
+         }
          { (* l is race free*)
+           clear aux.
            intros tid' Hin.
            assert (Hdis_tid'_acc: permMapsDisjoint acc (perm_maps tp tid')).
-         { apply permMapsDisjoint_comm. eapply Hl'.
-           rewrite <- Heq. right; assumption. }
-         destruct threadsList as [threadsListV threadsListP].
-         clear aux. simpl in *.
-         eapply threadSeq_subSeq in threadsListP; eauto.
-         apply threadSeq_lt in threadsListP.
-         assert (Hdis_tid'_tid: permMapsDisjoint (perm_maps tp tid) (perm_maps tp tid')).
-         { rewrite <- Heq in threadsListP.
-           apply Sorted_extends in threadsListP.
-           eapply List.Forall_forall with (x:=tid') in threadsListP; eauto.
-           assert (Hneq: nat_of_ord tid <> nat_of_ord tid').
-           { intros Hcontra. subst. unfold ord_lt in threadsListP. ssromega. }
-           assert (Hrace := race_free tp).
-           destruct tid as [ntid pf_tid], tid' as [ntid' pf_tid'].
-           eapply Hrace. intros Hcontra; subst. eapply Hneq. simpl. reflexivity.
-           apply ord_lt_trans.
+           { apply permMapsDisjoint_comm. eapply Hl'.
+             rewrite <- Heq. right; assumption. }
+           destruct threadsList as [threadsListV threadsListP].
+           simpl in *.
+           eapply threadSeq_subSeq in threadsListP; eauto.
+           apply threadSeq_lt in threadsListP.
+           assert (Hdis_tid'_tid: permMapsDisjoint (perm_maps tp tid) (perm_maps tp tid')).
+           { rewrite <- Heq in threadsListP.
+             apply Sorted_extends in threadsListP.
+             eapply List.Forall_forall with (x:=tid') in threadsListP; eauto.
+             assert (Hneq: nat_of_ord tid <> nat_of_ord tid').
+             { intros Hcontra. subst. unfold ord_lt in threadsListP. ssromega. }
+             assert (Hrace := race_free tp).
+             destruct tid as [ntid pf_tid], tid' as [ntid' pf_tid'].
+             eapply Hrace. intros Hcontra; subst. eapply Hneq. simpl. reflexivity.
+             apply ord_lt_trans.
+           }
+           assert (Hdis_tid_acc: permMapsDisjoint (perm_maps tp tid) acc).
+           { eapply Hl'. rewrite <-Heq. left; auto. }
+           remember ((pmap_union (permMapsCanonical tid) Hacc
+                                 (Hl' tid (permMapsUnion_oblig1 Heq)))) as pu.
+           symmetry in Heqpu.
+           destruct (pmap_union_inv (permMapsCanonical tid') Hdis_tid'_tid Hdis_tid'_acc Heqpu)
+             as [pf ?].
+           rewrite Heqpu. by apply permMapsDisjoint_comm.
+           rewrite <- Heq. intro. discriminate.
          }
-         assert (Hdis_tid_acc: permMapsDisjoint (perm_maps tp tid) acc).
-         { eapply Hl'. rewrite <-Heq. left; auto. }
-         remember ((pmap_union (permMapsCanonical tid) Hacc
-                               (Hl' tid (permMapsUnion_oblig1 Heq)))) as pu.
-         symmetry in Heqpu.
-         destruct (pmap_union_inv (permMapsCanonical tid') Hdis_tid'_tid Hdis_tid'_acc Heqpu)
-           as [pf ?].
-         rewrite Heqpu. by apply permMapsDisjoint_comm.
-         rewrite <- Heq. intro. discriminate.
-       }
-       { (* acc is canonical*) reflexivity. }
-       { (* l is a subSeq of threadsList*)
-         unfold subSeq in *. destruct Hsub as [n Hdrop].
-         exists (S n).
-         rewrite <- Heq in Hdrop. eapply dropS; eauto. }
-       { (* emptyPermMap is disjoint from all maps *)
-         intros tid Hin. apply empty_disjoint. }
-       { (* all maps are canonical *) reflexivity. }
-       { exists 0. apply drop0. }
-     Defined.
-     
-   Definition permMapsUnion : {p : PermMap.t | permMapsInv tp p}.
-     refine (let fix aux l
-                     acc (Hl': forall x, List.In x l -> permMapsDisjoint (perm_maps tp x) acc)
-                     (Hacc: (PermMap.map acc).1 = fun _ _ => None)
-                     (Hsub: subSeq l (sval threadsList)) {struct l}
-                 :=
-                 match l with
-                   | nil => fun Heq =>
-                              exist (fun p => permMapsInv tp p) acc _
-                   | tid :: l' =>
-                     fun (Heq: tid :: l' = l) =>
-                       let p := perm_maps tp tid in
-                       aux l'
-                           (@pmap_union p acc (permMapsCanonical tid)
-                                        Hacc (Hl' tid (permMapsUnion_oblig1 Heq))) _ _ _
-                 end (Logic.eq_refl l)
-             in aux (sval threadsList) emptyPermMap _ _ _).
-     Proof.
-       { (* permMapsInv *)
-         constructor. }
-       { (* l is race free*)
-         intros tid' Hin.
-         assert (Hdis_tid'_acc: permMapsDisjoint acc (perm_maps tp tid')).
-         { apply permMapsDisjoint_comm. eapply Hl'.
-           rewrite <- Heq. right; assumption. }
-         destruct threadsList as [threadsListV threadsListP].
-         clear aux. simpl in *.
-         eapply threadSeq_subSeq in threadsListP; eauto.
-         apply threadSeq_lt in threadsListP.
-         assert (Hdis_tid'_tid: permMapsDisjoint (perm_maps tp tid) (perm_maps tp tid')).
-         { rewrite <- Heq in threadsListP.
-           apply Sorted_extends in threadsListP.
-           eapply List.Forall_forall with (x:=tid') in threadsListP; eauto.
-           assert (Hneq: nat_of_ord tid <> nat_of_ord tid').
-           { intros Hcontra. subst. unfold ord_lt in threadsListP. ssromega. }
-           assert (Hrace := race_free tp).
-           destruct tid as [ntid pf_tid], tid' as [ntid' pf_tid'].
-           eapply Hrace. intros Hcontra; subst. eapply Hneq. simpl. reflexivity.
-           apply ord_lt_trans.
+         { (* acc is canonical*) clear aux. reflexivity. }
+         { (* l is a subSeq of threadsList*)
+           unfold subSeq in *.
+           rewrite <- Heq in Hsub.
+           simpl in Hsub.
+           move/eqP:Hsub=>Hsub.
+           assert (Hlt: size (tid :: l') <= size (tag threadsList))
+             by (eapply drop_size_lt; eapply Hsub).
+           simpl in Hlt.
+           assert (Hdrop: drop ((size (tag threadsList) - (size l').+1).+1) (tag threadsList) = l')
+             by (eapply dropS; eauto).
+           assert (Heq': (size (tag threadsList) - (size l').+1).+1 =
+                         (size (tag threadsList) - size l')) by ssromega.
+           rewrite Heq' in Hdrop. move/eqP:Hdrop; auto.
          }
-         assert (Hdis_tid_acc: permMapsDisjoint (perm_maps tp tid) acc).
-         { eapply Hl'. rewrite <-Heq. left; auto. }
-         remember ((pmap_union (permMapsCanonical tid) Hacc
-                               (Hl' tid (permMapsUnion_oblig1 Heq)))) as pu.
-         symmetry in Heqpu.
-         destruct (pmap_union_inv (permMapsCanonical tid') Hdis_tid'_tid Hdis_tid'_acc Heqpu)
-           as [pf ?].
-         rewrite Heqpu. by apply permMapsDisjoint_comm.
-         rewrite <- Heq. intro. discriminate.
-       }
-       { (* acc is canonical*) reflexivity. }
-       { (* l is a subSeq of threadsList*)
-         unfold subSeq in *. destruct Hsub as [n Hdrop].
-         exists (S n).
-         rewrite <- Heq in Hdrop. eapply dropS; eauto. }
-       { (* emptyPermMap is disjoint from all maps *)
-         intros tid Hin. apply empty_disjoint. }
-       { (* all maps are canonical *) reflexivity. }
-       { exists 0. apply drop0. }
-     Defined.
-
-            
-    
-   Definition permMapsUnion : PermMap.t.
-     refine (let fix aux l
-                     acc (Hl': forall x, List.In x l -> permMapsDisjoint (perm_maps tp x) acc)
-                     (Hacc: (PermMap.map acc).1 = fun _ _ => None)
-                     (Hlordered: Sorted ord_lt l) (*these are redunant?*)
-                     (Hlordered': Sorted ord_step l)
-                     (Hnext: forall x lhd, (sval threadsList) = lhd ++ l ->
-                                           List.In x lhd -> ~ Coqlib.plt (PermMap.next acc)
-                                                        (PermMap.next (getThreadPerm tp x)))
-                 :=
-                 match l with
-                   | nil => fun Heq =>
-                              acc
-                   | tid :: l' =>
-                     fun (Heq: tid :: l' = l) =>
-                       let p := perm_maps tp tid in
-                       aux l'
-                           (@pmap_union p acc (permMapsCanonical tid)
-                                        (Hacc) (Hl' tid (permMapsUnion_oblig1 Heq))) _ _ _ _ _
-                 end (Logic.eq_refl l)
-             in aux (sval threadsList) emptyPermMap _ _ _ _ _).
-     Proof.
-       admit. admit. admit. admit. admit. admit. admit. admit. admit. admit. Defined.
-       Focus 6. intros x lhd Hlst Hin Hcontra.
-            unfold pmap_union in Hcontra. simpl in Hcontra.
-            destruct l as [|o l]; inversion Heq. subst o. subst l'.
-            assert (HthreadsOrdered: Sorted ord_step (lhd ++ l)) by admit.
-            destruct lhd using last_ind. by inversion Hin.
-            rewrite <- cats1 in HthreadsOrdered.
-            rewrite <- catA in HthreadsOrdered. 
-            simpl in HthreadsOrdered.
-            
-            
-            destruct l.
-            + rewrite cats0 in Hlst.
-              
-            
-            
-              admit.
-       { unfold permMapsInv. split.
-         { intros.
-           
-       { intros tid' Hin.
-         assert (Hdis_tid'_acc: permMapsDisjoint acc (perm_maps tp tid')).
-         { apply permMapsDisjoint_comm. eapply Hl'.
-           rewrite <- Heq. right; assumption. }
-         assert (Hdis_tid'_tid: permMapsDisjoint (perm_maps tp tid) (perm_maps tp tid')).
-         { clear aux permMapsCanonical.
-           rewrite <- Heq in Hlordered.
-           apply Sorted_extends in Hlordered.
-           eapply List.Forall_forall with (x:=tid') in Hlordered; eauto.
-           assert (Hneq: nat_of_ord tid <> nat_of_ord tid').
-           { intros Hcontra. subst. unfold ord_lt in Hlordered. ssromega. }
-           pose (race_free tp) as pf_race.
-           destruct tid as [ntid pf_tid], tid' as [ntid' pf_tid'].
-           eapply pf_race. intros Hcontra; subst. eapply Hneq. simpl. reflexivity.
-           apply ord_lt_trans.
+         { (* Hnext_rec *)
+           clear aux Hinv_eq Hinit Hperm_ord.
+           intros. simpl.
+           destruct l as [|o l]; inversion Heq. subst o. subst l'.
+           destruct lhd as [|lhd tid'] using last_ind. by inversion HIn. clear IHlhd.
+           rewrite <- cats1 in Hlst.
+           rewrite <- catA in Hlst. simpl in Hlst.
+           assert (Hsub': subSeq (tid' :: l) (tag threadsList)).
+           { unfold subSeq. rewrite Hlst.
+             simpl. rewrite size_cat. simpl.
+             replace ((size lhd + (size l).+1 - (size l).+1)) with (size lhd) by ssromega.
+             apply/eqP.
+             apply drop_size_cat. reflexivity.
+           }
+           assert (Heq': tid' :: l = tid :: l)
+             by (eapply subSeq_det; eauto).
+           inversion Heq'; subst.
+           eapply in_rcons in HIn.
+           destruct HIn as [|HIn]; subst.
+           assert (Hp: p = getThreadPerm tp tid) by auto. rewrite Hp.
+           intros Hcontra.
+           unfold Coqlib.Plt in Hcontra.
+           apply Pos.max_lub_lt_iff in Hcontra.
+           destruct Hcontra as [Hcontra _]. by apply Pos.lt_irrefl in Hcontra.
+           specialize (Hnext _ _ Hlst HIn).
+           unfold Coqlib.Plt in *. intros Hcontra.
+           apply Pos.max_lub_lt_iff in Hcontra.
+           destruct Hcontra as [_ Hcontra]. auto.
          }
-         assert (Hdis_tid_acc: permMapsDisjoint (perm_maps tp tid) acc).
-         { eapply Hl'. rewrite <-Heq. left; auto. }
-         remember ((pmap_union (permMapsCanonical tid) Hacc
-                               (Hl' tid (permMapsUnion_oblig1 Heq)))) as pu.
-         symmetry in Heqpu.
-         destruct (pmap_union_inv (permMapsCanonical tid') Hdis_tid'_tid Hdis_tid'_acc Heqpu)
-           as [pf ?].
-         rewrite Heqpu. by apply permMapsDisjoint_comm.
-       }
-       { reflexivity. }
-       { destruct l; inversion Heq; subst. inversion Hlordered; subst. auto. }
-       { intros tid Hin. apply empty_disjoint. }
-       { reflexivity. }
-       { clear aux. destruct threadsList. by []. }
-     Defined.
+         { (*Hperm_ord rec*)
+           clear aux Hnext.
+           intros tid0 b ofs lhd Hlst HIn.
+           destruct l as [|o l]; inversion Heq. subst o. subst l'.
+           destruct lhd as [|lhd x] using last_ind. by inversion HIn. clear IHlhd.
+           rewrite <- cats1 in Hlst.
+           rewrite <- catA in Hlst. simpl in Hlst.
+           assert (Hsub': subSeq (x :: l) (tag threadsList)).
+           { unfold subSeq. rewrite Hlst.
+             simpl. rewrite size_cat. simpl.
+             replace ((size lhd + (size l).+1 - (size l).+1)) with (size lhd) by ssromega.
+             apply/eqP.
+             apply drop_size_cat. reflexivity.
+           }
+           assert (Heq': x :: l = tid :: l)
+             by (eapply subSeq_det; eauto).
+           inversion Heq'; subst.
+           eapply in_rcons in HIn.
+           destruct HIn as [|HIn]; subst.
+         - remember (@pmap_union p acc (permMapsCanonical tid) Hacc
+                                 (Hl' tid (@permMapsUnion_oblig1 'I_num_threads (tid :: l) tid l Heq)))
+             as pu eqn:Hpu.
+           symmetry in Hpu.
+           eapply (pmap_union_ord Hpu).
+         - specialize (Hperm_ord tid0 b ofs lhd Hlst HIn).
+           remember (@pmap_union p acc (permMapsCanonical tid) Hacc
+                                 (Hl' tid (@permMapsUnion_oblig1 'I_num_threads (tid :: l) tid l Heq)))
+             as pu eqn:Hpu.
+           symmetry in Hpu.
+           eapply pmap_union_ord with (b := b) (ofs := ofs) in Hpu.
+           destruct Hpu as [_ Hacc_ord].
+           eapply po_trans; eauto. }
+        { (*Hinit rec*)
+         clear aux Hnext Hperm_ord Hinv_eq.
+         intro Hlst. exfalso. rewrite Hlst in Hsub. rewrite <- Heq in Hsub.
+         unfold subSeq in Hsub. simpl in Hsub.
+         move/eqP:Hsub=>Hsub.
+         assert (Hcontra := drop_size_lt _ _ Hsub).
+         simpl in Hcontra. ssromega.
+        }
+        { (*Hinv_eq rec*)
+          clear aux Hnext Hperm_ord. intros.
+          destruct l as [|o l]; inversion Heq. subst o. subst l'.
+          destruct lhd as [|lhd x] using last_ind.
+          exfalso; auto.
+          clear IHlhd.
+          rewrite <- cats1 in Hlst.
+          rewrite <- catA in Hlst. simpl in Hlst.
+          assert (Hsub': subSeq (x :: l) (tag threadsList)).
+          { unfold subSeq. rewrite Hlst.
+            simpl. rewrite size_cat. simpl.
+            replace ((size lhd + (size l).+1 - (size l).+1)) with (size lhd) by ssromega.
+            apply/eqP.
+            apply drop_size_cat. reflexivity.
+          }
+          assert (Heq': x :: l = tid :: l)
+            by (eapply subSeq_det; eauto).
+          inversion Heq'; subst.
+          destruct lhd as [|tid' lhd].
+          - apply Hinit in Hlst. subst.
+            split; [idtac | split].
+            { exists tid. split. simpl. by left.
+              simpl. apply Pos.max_1_r. }
+            { intros. exists tid. split. simpl. auto.
+              remember ((pmap_union (permMapsCanonical tid) Hacc
+                                    (Hl' tid (permMapsUnion_oblig1 Heq)))) as pu eqn:Hpu.
+              symmetry in Hpu.
+              assert (Hres := pmap_union_result_union Hpu).
+              specialize (Hres b ofs).
+              rewrite Hpu.
+              assert (Hgoal: Some ((PermMap.map (perm_maps tp tid)) !! b ofs Cur) =
+                             Some ((PermMap.map pu) !! b ofs Cur)).
+              rewrite Hres. simpl. unfold PMap.get at 3. simpl.
+              rewrite PTree.gempty. unfold perm_union.
+              destruct ((PermMap.map (perm_maps tp tid)) !! b ofs Cur); reflexivity.
+              inversion Hgoal. reflexivity. }
+            { intros. exists tid. split. simpl. auto.
+              remember ((pmap_union (permMapsCanonical tid) Hacc
+                                    (Hl' tid (permMapsUnion_oblig1 Heq)))) as pu eqn:Hpu.
+              symmetry in Hpu.
+              assert (Hres := pmap_union_result_max Hpu).
+              specialize (Hres b ofs).
+              rewrite Hpu. rewrite Hres. simpl. unfold PMap.get at 3. simpl.
+              rewrite PTree.gempty. unfold perm_max.
+              destruct ((PermMap.map (perm_maps tp tid)) !! b ofs Max) as [p0|];
+                [destruct p0 |]; reflexivity.
+            }      
+          - assert (Hlhd': tid' :: lhd <> [::]) by (intros; discriminate).
+            destruct (Hinv_eq _ Hlhd' Hlst) as [Hnext [Hcur Hmax]];
+              clear Hinv_eq. split; [idtac| split].
+            { simpl.
+              clear Hcur Hmax. destruct Hnext as [tid'' [HIn Hnext_acc]].
+              apply List.in_inv in HIn. rewrite Hnext_acc.
+              destruct (Pos.max_dec (PermMap.next p) (PermMap.next (getThreadPerm tp tid'')))
+                as [Hmax | Hmax].
+              + exists tid. split. right.
+                apply in_rcons_refl.
+                assumption.
+              + exists tid''. split.
+                destruct HIn as [? | HIn]; auto.
+                right.
+                  by apply in_rcons_weaken.
+                  assumption.
+            }
+            { clear Hnext Hmax. intros.
+              destruct (Hcur ofs b) as [tid'' [HIn Hacc_cur]].
+              apply List.in_inv in HIn.
+              remember (pmap_union (permMapsCanonical tid) Hacc
+                                   (Hl' tid (permMapsUnion_oblig1 Heq))) as pu eqn:Hpu.
+              symmetry in Hpu.
+              assert (Hres := pmap_union_result_union Hpu).
+              specialize (Hres b ofs).
+              rewrite Hpu.
+              symmetry in Hres.
+              apply perm_union_result in Hres. destruct Hres as [Hres | Hres];
+                rewrite Hres; eexists; split; eauto.
+              apply in_rcons_refl.
+              destruct HIn as [? | HIn]; subst.
+              simpl; by left.
+              simpl. right. by apply in_rcons_weaken.
+            }
+            { clear Hnext Hcur. intros.
+              destruct (Hmax ofs b) as [tid'' [HIn Hacc_max]].
+              apply List.in_inv in HIn.
+              remember (pmap_union (permMapsCanonical tid) Hacc
+                                   (Hl' tid (permMapsUnion_oblig1 Heq))) as pu eqn:Hpu.
+              symmetry in Hpu.
+              assert (Hres := pmap_union_result_max Hpu).
+              specialize (Hres b ofs).
+              rewrite Hpu.
+              symmetry in Hres.
+              apply perm_max_result in Hres. destruct Hres as [Hres | Hres].
+              exists tid. split.
+              apply in_rcons_refl. auto. 
+              exists tid''. split.
+              destruct HIn as [? | HIn]; subst.
+              simpl; by left.
+              simpl. right. by apply in_rcons_weaken.
+              rewrite Hacc_max. rewrite Hres. reflexivity.
+            }
+        }
+        { (* emptyPermMap is disjoint from all maps *)
+          intros tid Hin. apply empty_disjoint. }
+        { (* all maps are canonical *) reflexivity. }
+        { unfold subSeq. rewrite subnn. by rewrite drop0. }
+        { (* Hnext init*)
+          intros. destruct lhd. inversion HIn.
+          assert (H: size (tag threadsList) = size ((o :: lhd) ++ tag threadsList)) by
+              (rewrite <- Hlst; reflexivity).
+          simpl in H. rewrite size_cat in H. exfalso. ssromega. }
+        {  (*Hperm_ord init*)
+          intros. destruct lhd. inversion HIn.
+          assert (H: size (tag threadsList) = size ((o :: lhd) ++ tag threadsList)) by
+              (rewrite <- Hlst; reflexivity).
+          simpl in H. rewrite size_cat in H. exfalso. ssromega. }
+        { (*Hacc init*) reflexivity. }
+        { (* Hinv_eq init*)
+          intros. destruct lhd. exfalso; auto.
+          assert (H: size (tag threadsList) = size ((o :: lhd) ++ tag threadsList)) by
+              (rewrite <- Hlst; reflexivity).
+          simpl in H. rewrite size_cat in H. exfalso. ssromega. }
+       Defined.
    
 End PermMapConstruction.
 

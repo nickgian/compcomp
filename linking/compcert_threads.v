@@ -1889,8 +1889,8 @@ Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
             (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
             (Hangel_wf: permMap_wf tp (aggelos n) tid0)
             (Htp': tp' = updThread tp tid (Krun c') (exist _ (aggelos n) Hangel_wf) (n+1))
-            (Hinv': permMapsInv tp' pnew)
-            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            (Hinv': permMapsUnion tp' (permMapsCanonical tp') = pnew)
+            (Hupd_mem: updPermMap m1' (sval pnew) = Some m'),
             step tp m tp' m'
   
   | step_unlock :
@@ -1911,8 +1911,8 @@ Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
                                                        (Some (Vint Int.zero)) c = Some c')
             (Hangel_wf: permMap_wf tp (aggelos n) tid0)
             (Htp': tp' = updThread tp tid (Krun c') (exist _ (aggelos n) Hangel_wf) (n+1))
-            (Hinv': permMapsInv tp' pnew)
-            (Hupd_mem: updPermMap m1' pnew = Some m'),
+            (Hinv': permMapsUnion tp' (permMapsCanonical tp') = pnew)
+            (Hupd_mem: updPermMap m1' (sval pnew) = Some m'),
             step tp m tp' m'
 
   | step_create :
@@ -1931,8 +1931,8 @@ Inductive step : thread_pool -> mem -> thread_pool -> mem -> Prop :=
             (Htp_upd: tp_upd = updThread tp tid (Krun c') (exist _ (aggelos n) Hangel_wf1) (n.+2))
             (Hangel_wf2: newPermMap_wf tp_upd (aggelos (n.+1)))
             (Htp': tp' = schedNext (addThread tp_upd (Krun c_new) (exist _ (aggelos (n.+1)) Hangel_wf2)))
-            (Hinv': permMapsInv tp' pnew)
-            (Hupd_mem: updPermMap m pnew = Some m'),
+            (Hinv': permMapsUnion tp' (permMapsCanonical tp') = pnew)
+            (Hupd_mem: updPermMap m (sval pnew) = Some m'),
             step tp m tp' m'
 
   | step_lockfail :

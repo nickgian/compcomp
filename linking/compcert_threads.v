@@ -187,22 +187,19 @@ Section permMapDefs.
   Admitted.
 
   (* Update the memory with a new permission map (of the same size) *)
-  Definition updPermMap (m : mem) (p : PermMap.t) : option mem :=
-    match positive_eq_dec (Mem.nextblock m) (PermMap.next p) with
+  Definition updPermMap (m : mem) (p : PermMap.t) : option mem.
+    refine (match positive_eq_dec (Mem.nextblock m) (PermMap.next p) with
       | left pf => 
         Some (Mem.mkmem 
                 (Mem.mem_contents m) 
                 (PermMap.map p) 
-                (Mem.nextblock m)
+                (PermMap.next p)
                 (PermMap.max p) 
-                (eq_rect_r 
-                   (fun n => forall (b : positive) (ofs : Z) (k : perm_kind),
-                               ~ Coqlib.Plt b n ->
-                               Maps.PMap.get b (PermMap.map p) ofs k = None)
-                   (PermMap.nextblock p) pf)
+                (PermMap.nextblock p)
                 (Mem.contents_default m))
       | right _ => None
-    end.
+            end).
+    Defined.
 
     Definition getPermMap (m : mem) :=
     {| PermMap.next := Mem.nextblock m;
@@ -295,8 +292,22 @@ Lemma unlift_m_inv : forall tid (Htid : tid < num_threads.+1) ord
                       = Some ord),
        nat_of_ord ord = tid.
 Proof.
-Admitted.
-
+  intros.
+  assert (Hcontra: unlift_spec (ordinal_pos_incr num_threads)
+                               (Ordinal (n:=num_threads.+1) (m:=tid) Htid) (Some ord)).
+  rewrite <- Hunlift.
+  apply/unliftP.
+  inversion Hcontra; subst.
+  inversion H0.
+  unfold bump.
+  assert (pf: ord < num_threads)
+    by (by rewrite ltn_ord).
+  assert (H: num_threads <= ord = false).
+  rewrite ltnNge in pf.
+  rewrite <- Bool.negb_true_iff. auto.
+  rewrite H. simpl. rewrite add0n. reflexivity.
+Defined.
+    
 Lemma permMapsDisjoint_comm :
   forall pmap1 pmap2
     (Hdis: permMapsDisjoint pmap1 pmap2),
@@ -817,8 +828,8 @@ Section PermMapConstruction.
   (* A constructive approach to computing the union of permission maps*)
 
   Import Maps SeqLemmas.
-  
-  Definition pmap_union (pmap1 pmap2 : PermMap.t)
+
+ Definition pmap_union (pmap1 pmap2 : PermMap.t)
              (Hcanonical1: isCanonical pmap1)
              (Hcanonical2: isCanonical pmap2)
              (Hdisjoint : permMapsDisjoint pmap1 pmap2) : PermMap.t.
@@ -2230,8 +2241,8 @@ Section CoreLemmas.
                (Hperm: (perm_maps tp) (Ordinal pf) = (perm_maps tp') (Ordinal pf')),
                tp_sim tp tp' tid.
 
-  Inductive mem_sim (m m' : Mem.mem) (tid : nat) (R : meminj): Prop :=
-  | Mem_sim : forall (tp tp' : thread_pool) (pf : tid < num_threads tp)
+  Inductive mem_sim (tp tp' : thread_pool) (m m' : Mem.mem) (tid : nat) (R : meminj): Prop :=
+  | Mem_sim : forall (pf : tid < num_threads tp)
                      (pf' : tid < num_threads tp') p p' m_tid m'_tid
                      (Hperm: p = getPermMap m)
                      (Hinv: permMapsInv tp p)
@@ -2239,41 +2250,166 @@ Section CoreLemmas.
                      (Hinv': permMapsInv tp' p')
                      (Hrestrict: restrPermMap (Ordinal pf) Hperm Hinv = m_tid)
                      (Hrestrict': restrPermMap (Ordinal pf') Hperm' Hinv' = m'_tid)
-                     (Hinj: Mem.mem_inj R m_tid m'_tid),
-               mem_sim m m' tid R.
+                     (Hinj: Mem.inject R m_tid m'_tid),
+                mem_sim tp tp' m m' tid R.
 
+  Definition updPermMap_get pmap m m'
+                           (Hupd: updPermMap m pmap = Some m') :
+                           getPermMap m' = pmap.
+  Proof.
+    intros.
+    unfold updPermMap in Hupd.
+    destruct (Pos.eq_dec (Mem.nextblock m) (PermMap.next pmap)) eqn:Heq.
+    inversion Hupd; subst.
+    unfold getPermMap. 
+    destruct pmap. reflexivity.
+    discriminate.
+  Qed.
+
+  Lemma mem_inj_valid_block:
+    forall (m1j m1'j : mem) (R : meminj) (b1 b2 : block) 
+           (delta ofs : Z)
+           (mi_freeblocks: forall b : block, ~ Mem.valid_block m1j b
+                                             -> R b = None)
+           (Hr: R b1 = Some (b2, delta)),
+      Mem.valid_block m1j b1.
+  Proof.
+    intros.
+    assert (Hcases := Pos.lt_total b1 (Mem.nextblock m1j)).
+    destruct Hcases as [Hvalid | Hinvalid]; try auto.
+    assert (Hinvalid': ~ Mem.valid_block m1j b1).
+    intro Hcontra. unfold Mem.valid_block,Coqlib.Plt in Hcontra.
+    apply Pos.lt_nle in Hcontra.
+    apply or_comm in Hinvalid.
+    assert (Hinvalid': (Mem.nextblock m1j <= b1)%positive)
+      by (eapply Pos.lt_eq_cases; destruct Hinvalid; auto).
+    auto.
+    eapply mi_freeblocks in Hinvalid'. exfalso. congruence.
+  Qed.
+  
+  Lemma disjoint_meminj_inv :
+    forall m1j m1'j m2j R
+           (Hminj: Mem.inject R m1j m1'j)
+             (Hunchanged_on: Mem.unchanged_on (fun _ _ => True) m1j m2j),
+      Mem.mem_inj R m2j m1'j.
+  Proof.
+    intros.
+    inversion Hminj; clear Hminj. inversion mi_inj.
+    inversion Hunchanged_on.
+    constructor.
+    { intros b1 b2 delta ofs k p Hr Hperm.
+      assert (Hvalid: Mem.valid_block m1j b1)
+        by (eapply mem_inj_valid_block; eauto).
+      eapply mi_perm; eauto.
+      eapply unchanged_on_perm; eauto.
+    }
+    { intros b1 b2 delta chunk ofs p Hr Hrange.
+      
+      unfold Mem.range_perm in Hrange.
+      
+      eapply mi_align with (ofs := ofs) (p := p); eauto.
+      unfold Mem.range_perm in *. intros ofs' Hrange'.
+      specialize (Hrange _ Hrange').
+      assert (Hvalid: Mem.valid_block m1j b1)
+        by (eapply mem_inj_valid_block; eauto).
+      eapply unchanged_on_perm; eauto.
+    }
+    { intros b1 ofs b2 delta Hr Hperm.
+      assert (Hvalid: Mem.valid_block m1j b1)
+        by (eapply mem_inj_valid_block; eauto).
+      apply unchanged_on_perm in Hperm; eauto.
+      specialize (mi_memval _ _ _ _ Hr Hperm).
+      erewrite unchanged_on_contents; eauto.
+    }
+  Qed.
+
+  Lemma disjoint_inject_invariant :
+    forall m1j m1'j m2j R
+           (Hminj: Mem.inject R m1j m1'j)
+           (Hnext: (Mem.nextblock m1j <= Mem.nextblock m2j)%positive)
+           (Hunchanged_on: Mem.unchanged_on (fun _ _ => True) m1j m2j),
+      Mem.inject R m2j m1'j.
+  Proof.
+    intros. constructor. eapply disjoint_meminj_inv; eauto.
+    { intros b Hinvalid. inversion Hminj.
+      destruct (R b) as [[b' delta]|] eqn:Hr; auto.
+      assert (Hvalid := Mem.valid_block_inject_1 _ _ _ _ _ _ Hr Hminj).
+      unfold Mem.valid_block, Coqlib.Plt in *.
+      exfalso. apply Pos.le_nlt in Hinvalid.
+      assert (Hgt: (Mem.nextblock m1j <= b)%positive).
+      eapply Pos.le_trans; eauto.
+      eapply Pos.lt_nle in Hvalid. auto. }
+    { intros b b' delta Hr.
+      inversion Hminj. eapply mi_mappedblocks; eauto. }
+    { inversion Hminj.
+      intros b1 b1' delta1 b2 b2' delta2 ofs1 ofs2 Hneq Hr1 Hr2 Hperm1 Hperm2.
+      specialize (mi_no_overlap _ _ _ _ _ _ ofs1 ofs2 Hneq Hr1 Hr2).
+      assert (Hvalid1: Mem.valid_block m1j b1)
+        by (eapply mem_inj_valid_block; eauto).
+      assert (Hvalid2: Mem.valid_block m1j b2)
+        by (eapply mem_inj_valid_block; eauto).
+      eapply Mem.perm_unchanged_on_2 in Hperm1; eauto.
+      eapply Mem.perm_unchanged_on_2 in Hperm2; eauto.
+        by simpl. by simpl. }
+    { intros b b' delta ofs Hr Hperm.
+      inversion Hminj.
+      eapply mi_representable; eauto.
+      assert (Hvalid1: Mem.valid_block m1j b)
+        by (eapply mem_inj_valid_block; eauto).
+      destruct Hperm as [Hperm | Hperm]; [left | right];
+      eapply Mem.perm_unchanged_on_2; eauto.
+        by simpl. by simpl.
+    }
+  Qed.
+     
   Lemma corestep_inj_invariant :
     forall (tp1 tp1' tp2 : thread_pool) c (m1 m2 m1' : mem) (i j : nat) (R: meminj)
            (Hneq: i <> j) (pfi : i < num_threads tp1)
            (Htp_sim: tp_sim tp1 tp1' j)
-           (Hmem_sim: mem_sim m1 m1' j R)
+           (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
            (Hsched: List.hd_error (schedule tp1) = Some i)
            (Hget: getThreadC tp1 (Ordinal pfi) = Krun c)
            (Hat_external: semantics.at_external the_sem c = None)
            (Hstep: fstep tp1 m1 tp2 m2),
-      tp_sim tp2 tp1' j /\ mem_sim m2 m1' j R.
+      tp_sim tp2 tp1' j /\ mem_sim tp2 tp1' m2 m1' j R.
   Proof.
-    intros. inversion Hstep; subst; simpl in *;
-    rewrite Hsched in Hsched0; inversion Hsched0; subst tid0; clear Hsched0; clear Hstep.
-    assert (Heq: Htid0_lt_pf0 = pfi)
-      by (erewrite leq_pf_irr; reflexivity).
-    subst.
-    rewrite Hthread in Hget. inversion Hget; subst; clear Hget.
-    destruct Hcorestep as [? [? [Hcorestep Heq]]].
-    inversion Heq; subst; simpl in *.
-    split.
-    { inversion Htp_sim.
-      econstructor.
+    intros. inversion Hstep as [tpt1 tpt2 mt1 m1i ci m2i mt2 ci' | | | | | | ] .
+    { subst tpt1 mt1 mt2.
+      rewrite Hsched in Hsched0; inversion Hsched0; subst tid0; clear Hsched0; clear Hstep.
+      assert (Heq: Htid0_lt_pf0 = pfi)
+        by (erewrite leq_pf_irr; reflexivity).
+      subst Htid0_lt_pf0.
+      rewrite Hthread in Hget. inversion Hget. subst c; clear Hget.
+      destruct Hcorestep as [? [? [Hcorestep Heq]]].
+      inversion Heq; subst x x0; simpl in *.
+      split.
+      { inversion Htp_sim. rewrite Htp'.
+        econstructor.
       - inversion Hnum. reflexivity.
       - inversion Hcounter. reflexivity.
       - simpl. rewrite if_false. eassumption.
         apply/eqP. intros Hcontra; inversion Hcontra; auto.
       - simpl. rewrite if_false. assumption.
       - apply/eqP. intros Hcontra; inversion Hcontra; auto. }
-    { inversion Hmem_sim.
-      remember 
-      econstructor.
-      - 
+      { inversion Hmem_sim as [pf1 pf1' p1 p1' m1j m1'j].
+        match goal with
+          | [H: permMapsUnion ?Pf1 ?Pf2 = _ |- _] =>
+            pose Pf1 as pfcanonical; pose Pf2 as pfrace
+        end.
+        assert (pf2: j < num_threads (schedNext tpt2))
+          by (subst; simpl; auto).
+        assert (Hperm2: sval pnew = getPermMap m2)
+          by (symmetry; eapply updPermMap_get; eauto).
+        remember (restrPermMap (Ordinal pf2)  Hperm2 (svalP pnew)) as m2j eqn:Hrestr2_j;
+        symmetry in Hrestr2_j.
+        econstructor.
+        eassumption. eassumption.
+        eapply disjoint_inject_invariant; eauto.
+
+        Lemma corestep_mem_inv :
+          forall c1 m1 c2 m2 pmap',
+            
+
         
     
 

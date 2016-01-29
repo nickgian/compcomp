@@ -2477,6 +2477,11 @@ Section CoreLemmas.
       | Krun c => Krun (rename_code R c)
       | Kstage ext xs c => Kstage ext xs (rename_code R c)
     end.
+
+  Hypothesis rename_code_at_ext :
+    forall R c,
+      semantics.at_external the_sem (rename_code R c) = None <->
+      semantics.at_external the_sem c = None.
   
   Inductive tp_sim (tp tp' : thread_pool) (tid : nat) (R: block -> block) : Prop :=
   | Tp_sim : forall (pf: tid < num_threads tp)
@@ -3130,74 +3135,144 @@ Lemma corestep_updPermMap :
   Qed.
       
   Lemma corestep_sim :
-    forall (tp1 tp2 tp3 tp1' : thread_pool) c1 c2 (m1 m2 m3 m1' : mem)
-      (Htp_sim: forall tid, tid < num_threads tp1 -> tp_sim tp1 tp1' tid)
-      (Hmem_sim: forall tid, tid < num_threads tp1 -> exists R, mem_sim tp1 tp1' m1 m1' tid R)
-      (i j : nat) (Hneq: i <> j) (pfi : i < num_threads tp1) (pfj : j < num_threads tp2) xs xs'
-      (Hsched: schedule tp1 = i :: j :: xs)
-      (Hsched': schedule tp1' = j :: i :: xs')
-      (Hget1: getThreadC tp1 (Ordinal pfi) = Krun c1)
-      (Hat_external1: semantics.at_external the_sem c1 = None)
-      (Hstep1: fstep tp1 m1 tp2 m2)
-      (Hget2: getThreadC tp2 (Ordinal pfj) = Krun c2)
-      (Hat_external2: semantics.at_external the_sem c2 = None)
-      (Hstep2: fstep tp2 m2 tp3 m3),
+    forall (tp1 tp2 tp3 tp1' : thread_pool) c1 c2 (m1 m2 m3 m1' : mem) R
+           (Hrace' : race_free tp1')
+           (Hcanonical' : forall tid,
+                            isCanonical (perm_maps tp1' tid))
+           (Hsim: forall tid, tid < num_threads tp1 -> tp_sim tp1 tp1' tid R /\
+                                                       mem_sim tp1 tp1' m1 m1' tid R)
+           (Heq': sval (permMapsUnion Hcanonical' Hrace') = getPermMap m1')
+           (i j : nat) (Hneq: i <> j) (pfi : i < num_threads tp1)
+           (pfj : j < num_threads tp2) xs xs'
+           (Hsched: schedule tp1 = i :: j :: xs)
+           (Hsched': schedule tp1' = j :: i :: xs')
+           (Hget1: getThreadC tp1 (Ordinal pfi) = Krun c1)
+           (Hat_external1: semantics.at_external the_sem c1 = None)
+           (Hstep1: fstep tp1 m1 tp2 m2)
+           (Hget2: getThreadC tp2 (Ordinal pfj) = Krun c2)
+           (Hat_external2: semantics.at_external the_sem c2 = None)
+           (Hstep2: fstep tp2 m2 tp3 m3),
     exists tp2' m2' tp3' m3',
       fstep tp1' m1' tp2' m2' /\ fstep tp2' m2' tp3' m3' /\
-        (forall tid, tid < num_threads tp3 -> tp_sim tp3 tp3' tid) /\
-        (forall tid, tid < num_threads tp3 -> exists R, mem_sim tp3 tp3' m3 m3' tid R).
+      (forall tid, tid < num_threads tp3 -> tp_sim tp3 tp3' tid R /\
+                                            mem_sim tp3 tp3' m3 m3' tid R).
   Proof.
-    intros. inversion Hstep1 as [tpt1 tpt2 mt1 m1i ci m2i mt2 ci' pnew tid0 Hhd
-                                      Htid0_lt_pf Hrace Hcan Heq Hget1b Hrestrict_pmap1 Hcore1 Htp2
-                                      Hunion Hupd | | | | | | ];
-      [subst tpt1 mt1 mt2 | subst | subst | subst | subst | subst | subst];
-    repeat
-      (match goal with
-         | [H1: List.hd_error (schedule ?Tp) = Some ?Tid,
-                H2: schedule ?Tp = _ |- _] => rewrite H2 in H1; simpl in H1; inversion H1;
-         try (subst Tid; clear H1)
-         | [H1: getThreadC ?Tp (@Ordinal _ ?Tid ?Pf1) = _,
-                H2: getThreadC ?Tp (@Ordinal _ ?Tid ?Pf2) = _ |- _] =>
-           assert (Pf1 = Pf2) by (erewrite leq_pf_irr; reflexivity);
-           subst Pf2
-         | [H1: getThreadC ?Tp (Ordinal ?Pf) = _,
-                H2: getThreadC ?Tp (Ordinal ?Pf) = Krun ?C2 |- _] =>   
-          rewrite H2 in H1; inversion H1; try (subst C2; clear H1)
-        | [H1: semantics.at_external _ ?C1 = None, H2: semantics.at_external _ ?C1 = Some _ |- _] =>
-          congruence
-        | [H1: is_true (leq (n (num_threads ?Tp)) ?I),
-                        H2: is_true (leq (S ?I) (n (num_threads ?Tp))) |- _] =>
-          clear - H1 H2;
-           exfalso; ssromega
-       end).
-    assert (Hsim21'_k: forall k, k < num_threads tp1 -> i <> k -> exists Rk, tp_sim tp2 tp1' k
-                                                                /\ mem_sim tp2 tp1' m2 m1' k Rk).
-    { intros k pfk Hki.
-      destruct (Hmem_sim k pfk) as [Rk Hmem_simk].
-      exists Rk.
+    intros.
+    (* j-simulation of tp2-tp1' *)
+    assert (Hsimj_21': tp_sim tp2 tp1' j R /\ mem_sim tp2 tp1' m2 m1' j R).
+    { inversion Hstep1; step_absurd; subst; simpl in pfj. destruct (Hsim _ pfj).
       eapply corestep_sim_invariant_l; eauto.
       rewrite Hsched. reflexivity.
     }
+    destruct Hsimj_21' as [Htpsimj_21' Hmemsimj_21'].
+    (* j-simulation of tp3-tp2' *)
+    assert (Hsimj_32':
+              exists tp2' m2',
+                fstep tp1' m1' tp2' m2' /\
+                (forall tid, tp_sim tp2 tp1' tid R -> tp_sim tp3 tp2' tid R) /\
+                (forall tid,
+                   mem_sim tp2 tp1' m2 m1' tid R -> mem_sim tp3 tp2' m3 m2' tid R)).
+    { eapply corestep_sim_aux with (tp1 := tp2) (tp2 := tp3); eauto.
+      - inversion Hstep1; step_absurd; subst. simpl. rewrite Hsched. reflexivity.
+      - rewrite Hsched'. reflexivity.
+    }
+    destruct Hsimj_32' as [tp2' [m2' [Hstep1' [Htp_sim32' Hmem_sim32']]]].
+    (* i-simulation of tp1-tp2' *)
+    assert (Hsimi_12': tp_sim tp1 tp2' i R /\ mem_sim tp1 tp2' m1 m2' i R).
+    { assert (pfj': j < num_threads tp1')
+        by (inversion Htpsimj_21'; assumption).
+      destruct (Hsim _ pfi).
+      eapply corestep_sim_invariant_r with (pfi' := pfj') (c := rename_code R c2);
+        eauto.
+      rewrite Hsched'. reflexivity.
+      inversion Htpsimj_21'. unfold getThreadC in *. pf_cleanup. rewrite <- Hpool.
+      unfold rename_core. rewrite Hget2. reflexivity.
+        by apply rename_code_at_ext.
+    }
+    destruct Hsimi_12' as [Htpsimi_12' Hmemsimi_12'].
+    (* i-simulation of tp2-tp3' *)
+    assert (Hsimi_23':
+              exists tp3' m3',
+                fstep tp2' m2' tp3' m3' /\
+                (forall tid, tp_sim tp1 tp2' tid R -> tp_sim tp2 tp3' tid R) /\
+                (forall tid,
+                   mem_sim tp1 tp2' m1 m2' tid R -> mem_sim tp2 tp3' m2 m3' tid R)).
+    { assert (Hget1': forall pfj',
+                        getThreadC tp1' (Ordinal (m := j) pfj') = rename_core R (Krun c2)).
+      { intros. inversion Htpsimj_21'. unfold getThreadC in *.
+        rewrite <- Hget2. pf_cleanup. rewrite Hpool. reflexivity. }
+      assert (Hat_external1': semantics.at_external the_sem (rename_code R c2) = None)
+        by (by apply rename_code_at_ext).
+      unfold rename_core in Hget1'.
+      inversion Hstep1';
+      repeat match goal with
+        | [H1: List.hd_error (schedule ?Tp) = Some ?Tid,
+               H2: schedule ?Tp = _ |- _] => rewrite H2 in H1; inversion H1;
+                                             subst Tid
+        | [pf: is_true (?Tid < n (num_threads tp1')) |- _] => specialize (Hget1' pf)
+        | [H1: getThreadC tp1' _ = _, H2: getThreadC tp1' _ = Krun ?C |- _] =>
+          rewrite H1 in H2; inversion H2; subst C
+             end; step_absurd. subst m m' tp.
+      - assert (Heq2': sval pnew = getPermMap m2')
+          by (symmetry; eapply updPermMap_get; eauto).
+        rewrite <- Hinv' in Heq2'.
+        eapply corestep_sim_aux with (tp1 := tp1) (tp2 := tp2) (c1 := c1); eauto.
+        rewrite Hsched. simpl. reflexivity.
+        subst tp'. simpl. rewrite Hsched'. reflexivity. rewrite H1.
+        assumption.
+        rewrite H1. assumption.
+      - inversion Htpsimj_21'. exfalso. clear - Htid0_lt_pf pf'. ssromega.
+    }
+    destruct Hsimi_23' as [tp3' [m3' [Hstep2' [Htp_sim23' Hmem_sim23']]]].
+    exists tp2' m2' tp3' m3'; split; auto; split; auto.
+    intros tid pf3_tid.
+    assert (Hnum_eq: num_threads tp3 = num_threads tp1).
+    { specialize (Htp_sim32' _ Htpsimj_21'). inversion Htpsimi_12';
+        inversion Htp_sim32'. rewrite Hnum. assumption. }
+    destruct (i == tid) eqn:Htid; move/eqP:Htid=>Htid; subst.
+    + eapply corestep_sim_invariant_l; eauto.
+      inversion Hstep1; step_absurd; subst.
+      simpl. rewrite Hsched. reflexivity.
+    + assert (Hsimtid_21': tp_sim tp2 tp1' tid R /\ mem_sim tp2 tp1' m2 m1' tid R).
+      { inversion Hstep1; step_absurd; simpl in pf3_tid.
+        rewrite Hnum_eq in pf3_tid.
+        destruct (Hsim _ pf3_tid).
+        eapply corestep_sim_invariant_l; eauto.
+        rewrite Hsched. reflexivity.
+        subst. auto.
+      }
+      destruct Hsimtid_21' as [Htpsimtid_21' Hmemsimtid_21'].
+      assert (Hget1': forall pfj',
+                        getThreadC tp1' (Ordinal (m := j) pfj') = rename_core R (Krun c2)).
+      { intros. inversion Htpsimj_21'. unfold getThreadC in *.
+        rewrite <- Hget2. pf_cleanup. rewrite Hpool. reflexivity. }
+      assert (Hat_external1': semantics.at_external the_sem (rename_code R c2) = None)
+        by (by apply rename_code_at_ext).
+      unfold rename_core in Hget1'.
+      inversion Htpsimj_21'.
+      inversion Hstep1';
+        repeat match goal with
+                 | [H1: List.hd_error (schedule ?Tp) = Some ?Tid,
+                        H2: schedule ?Tp = _ |- _] => rewrite H2 in H1; inversion H1;
+                                                      subst Tid
+                 | [pf: is_true (?Tid < n (num_threads tp1')) |- _] => specialize (Hget1' pf)
+                 | [H1: getThreadC tp1' _ = _, H2: getThreadC tp1' _ = Krun ?C |- _] =>
+                   rewrite H1 in H2; inversion H2; subst C
+               end; step_absurd. subst m m' tp tp'.
+      inversion  Htpsimi_12'. 
+      eapply corestep_sim_invariant_r with
+      (j := tid) (tp1' := tp2') (c := rename_code R c1) (pfi' := pf'0);
+        eauto.
+      subst tp2'.
+      simpl. rewrite Hsched'. reflexivity.
+      unfold getThreadC in *. 
+      unfold rename_core in Hpool0.
+      pf_cleanup. rewrite Hget1 in Hpool0. rewrite Hpool0. reflexivity.
+        by apply rename_code_at_ext.
+  Qed.
 
-                          
-    
-    clear Hstep1.
-    destruct Hcore1 as [x [x0 [Hcore1 Heq]]].
-    inversion Heq; subst x x0; simpl in *. 
-    split.
-
-    
-  Section CorePerm.
-
-    Variable the_ge : Genv.t (Modsem.F sem) (Modsem.V sem).
-    Hypothesis corestep_perm :
-      forall c m c' m' (Hstep: corestep the_sem the_ge c m c' m'),
-        (Mem.nextblock m = Mem.nextblock m' /\ Mem.mem_access m = Mem.mem_access m') \/
-        (Coqlib.Plt (Mem.nextblock m) (Mem.nextblock m') /\
-         forall b ofs, Coqlib.Plt b (Mem.nextblock m) ->
-                       (Mem.mem_access m) b ofs k
-        
-    
+End CoreLemmas.
+End CoreLemmas.
 
 (* Move to another file*)
 Module In2.

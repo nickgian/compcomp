@@ -88,6 +88,32 @@ Section permMapDefs.
             try destruct p1, p2; simpl in Hunion; try discriminate;
             try inversion Hunion; subst; unfold Mem.perm_order''; split; constructor.
   Defined.
+
+  Inductive not_racy : option permission -> Prop :=
+  | non_empty : not_racy (Some Nonempty)
+  | empty : not_racy None.
+
+  Inductive racy : option permission -> Prop :=
+  | writable : racy (Some Writable)
+  | freeable : racy (Some Freeable).
+
+  Lemma not_racy_union :
+    forall p1 p2 (Hnot_racy: not_racy p1),
+    exists pu, perm_union p1 p2 = Some pu.
+  Proof. intros. destruct p2 as [o |]; [destruct o|]; inversion Hnot_racy; subst; 
+                 simpl; eexists; reflexivity.
+  Qed.
+
+  Lemma no_race_racy : forall p1 p2 (Hracy: racy p1)
+                              (Hnorace: exists pu, perm_union p1 p2 = Some pu),
+                         not_racy p2.
+  Proof.
+    intros.
+    destruct p2 as [o|]; [destruct o|];
+    inversion Hracy; subst;
+    simpl in *; inversion Hnorace;
+    (discriminate || constructor).
+  Qed.
     
   Definition perm_max (p1 p2 : option permission) : option permission :=
     match p1,p2 with
@@ -225,21 +251,195 @@ Definition permMapLt pmap1 pmap2 : Prop :=
           (Maps.PMap.get b (PermMap.map pmap2) ofs Max)
           (Maps.PMap.get b (PermMap.map pmap1) ofs Max)).
 
-Definition setPerm p b ofs pmap :=
-  Maps.PMap.set b
-                (fun ofs' k =>
-                   match k with
-                     | Max => Maps.PMap.get b (PermMap.map pmap) ofs k
-                     | Cur =>
-                       if Coqlib.zeq ofs ofs' then
-                         Some p
-                       else Maps.PMap.get b (PermMap.map pmap) ofs k
-                   end)
-                (PermMap.map pmap).
+Definition setPerm (p_cur p_max : option permission)
+           (Hord: Mem.perm_order'' p_max p_cur) (b : block)
+           (ofs : Z) (pmap : PermMap.t) : PermMap.t.
+  refine ({| PermMap.next := Pos.max (PermMap.next pmap) b;
+             PermMap.map :=
+               Maps.PMap.set b
+                             (fun ofs' k =>
+                                match k with
+                                  | Max =>
+                                    if Coqlib.zeq ofs ofs' then
+                                      p_max
+                                    else
+                                      Maps.PMap.get b (PermMap.map pmap) ofs' k
+                                  | Cur =>
+                                  if Coqlib.zeq ofs ofs' then
+                                    p_cur
+                                  else Maps.PMap.get b (PermMap.map pmap) ofs' k
+                                end)
+                             (PermMap.map pmap);
+             PermMap.max := _;
+             PermMap.nextblock := _ |}).
+  Proof.
+    { intros b' ofs'.
+      destruct (Pos.eq_dec b b') as [Hblock_eq | Hblock_neq].
+      - subst.
+        destruct (Z.eq_dec ofs ofs') as [Hofs_eq | Hofs_neq] eqn:Hofs;
+          subst; unfold Coqlib.zeq;
+          rewrite Maps.PMap.gss; rewrite Hofs; simpl. assumption.
+        destruct pmap; auto.
+      - rewrite Maps.PMap.gso; auto.
+        destruct pmap; auto.
+    }
+    { intros b' ofs' k Hplt.
+      admit.
+    }
+  Defined.
 
-Definition getPerm b ofs k (pmap : PermMap.t) :=
-  (Maps.PMap.get b (PermMap.map pmap)) ofs k.
+  Inductive SetPerm b ofs : PermMap.t -> PermMap.t -> Prop :=
+  | set: forall pmap1 pmap2 b' ofs' k,
+           b <> b' \/ (b = b' /\ ofs <> ofs') ->
+           Maps.PMap.get b' (PermMap.map pmap1) ofs' k =
+           Maps.PMap.get b' (PermMap.map pmap2) ofs' k ->
+           SetPerm b ofs pmap1 pmap2.
 
+  Lemma setPerm_correct :
+    forall p_cur p_max (Hord: Mem.perm_order'' p_max p_cur) b ofs
+           pmap b' ofs' k,
+           b <> b' \/ (b = b' /\ ofs <> ofs') ->
+           Maps.PMap.get b' (PermMap.map pmap) ofs' k =
+           Maps.PMap.get b' (PermMap.map (setPerm p_cur p_max Hord b ofs pmap))
+                         ofs' k.
+  Proof.
+    intros. unfold setPerm. simpl.
+      destruct H. rewrite Maps.PMap.gso. reflexivity. auto.
+      destruct H. subst. unfold Coqlib.zeq.
+      rewrite Maps.PMap.gss.
+      destruct (Z.eq_dec ofs ofs'). exfalso; auto.
+      simpl.
+      destruct k; auto.
+  Qed.
+   
+  Lemma setPerm_canonical :
+    forall p_cur p_max (Hord: Mem.perm_order'' p_max p_cur) b ofs
+           pmap (Hpmap_can: isCanonical pmap),
+      isCanonical (setPerm p_cur p_max Hord b ofs pmap).
+  Proof.
+    intros. unfold setPerm, isCanonical in *. simpl.
+    assumption.
+  Qed.
+
+  Lemma setPerm_noracy1 :
+    forall p_cur1 p_cur2 p_max1 p_max2
+           (Hord1: Mem.perm_order'' p_max1 p_cur1)
+           (Hord2: Mem.perm_order'' p_max2 p_cur2)
+           b ofs pmap1 pmap2
+           (Hrace: permMapsDisjoint pmap1 pmap2)
+           (Hnot_racy: not_racy p_cur1),
+      permMapsDisjoint (setPerm p_cur1 p_max1 Hord1 b ofs pmap1)
+                       (setPerm p_cur2 p_max2 Hord2 b ofs pmap2).
+  Proof.
+    intros.
+    unfold permMapsDisjoint, setPerm. simpl.
+    intros b' ofs'.
+    destruct (Pos.eq_dec b b') as [Hblock_eq | Hblock_neq].
+    - subst.
+      destruct (Z.eq_dec ofs ofs') as [Hofs_eq | Hofs_neq] eqn:Hofs;
+        subst; unfold Coqlib.zeq;
+        do 2 rewrite Maps.PMap.gss; rewrite Hofs; simpl;
+        [apply not_racy_union|]; auto. 
+    - rewrite Maps.PMap.gso; auto.
+      rewrite Maps.PMap.gso; auto.
+  Qed.
+    
+  Definition getPerm b ofs k (pmap : PermMap.t) :=
+    (Maps.PMap.get b (PermMap.map pmap)) ofs k.
+  
+  Lemma setPerm_noracy2 :
+    forall p_cur1 p_max1
+           (Hord1: Mem.perm_order'' p_max1 p_cur1)
+           b ofs pmap1 pmap2
+           (Hrace12: permMapsDisjoint pmap1 pmap2)
+           (Hnot_racy: not_racy p_cur1),
+      permMapsDisjoint (setPerm p_cur1 p_max1 Hord1 b ofs pmap1) pmap2.
+  Proof.
+    intros.
+    unfold permMapsDisjoint, setPerm. simpl.
+    intros b' ofs'.
+    destruct (Pos.eq_dec b b') as [Hblock_eq | Hblock_neq].
+    - subst.
+      destruct (Z.eq_dec ofs ofs') as [Hofs_eq | Hofs_neq] eqn:Hofs;
+        subst; unfold Coqlib.zeq;
+        rewrite Maps.PMap.gss; rewrite Hofs; simpl;
+        [apply not_racy_union|]; auto. 
+    - rewrite Maps.PMap.gso; auto.
+  Qed.
+
+  Lemma racy_disjoint :
+    forall b ofs pmap1
+           (Hracy: racy (getPerm b ofs Cur pmap1)),
+      (forall pmap, permMapsDisjoint pmap1 pmap ->
+                    not_racy (getPerm b ofs Cur pmap)).
+  Proof.
+    intros b ofs pmap1 Hracy pmap Hdisjoint.
+    unfold permMapsDisjoint in *.
+    specialize (Hdisjoint b ofs). destruct Hdisjoint as [pu Hpu].
+    unfold getPerm in *.
+    inversion Hracy as [Hp1 | Hp1]; rewrite <- Hp1 in Hpu;
+    simpl in Hpu; destruct (Maps.PMap.get b (PermMap.map pmap) ofs Cur) as [p|];
+    try destruct p; inversion Hpu; constructor.
+  Qed.
+
+  Lemma setPerm_noracy3 :
+    forall p_cur1 p_max1
+           (Hord1: Mem.perm_order'' p_max1 p_cur1)
+           b ofs pmap1 pmap2
+           (Hrace12: permMapsDisjoint pmap1 pmap2)
+           (Hnot_racy: not_racy (getPerm b ofs Cur pmap2)),      
+      permMapsDisjoint (setPerm p_cur1 p_max1 Hord1 b ofs pmap1) pmap2.
+  Proof.
+    intros.
+    unfold permMapsDisjoint, setPerm. simpl.
+    intros b' ofs'.
+    destruct (Pos.eq_dec b b') as [Hblock_eq | Hblock_neq].
+    - subst.
+      destruct (Z.eq_dec ofs ofs') as [Hofs_eq | Hofs_neq] eqn:Hofs;
+        subst; unfold Coqlib.zeq;
+        rewrite Maps.PMap.gss; rewrite Hofs; simpl;
+        [rewrite perm_union_comm; apply not_racy_union|]; auto. 
+    - rewrite Maps.PMap.gso; auto.
+  Qed.
+
+  (* Lemma setPerm_noracy2 : *)
+  (*   forall p_cur1 p_cur2 p_max1 p_max2 *)
+  (*          (Hord1: Mem.perm_order'' p_max1 p_cur1) *)
+  (*          (Hord2: Mem.perm_order'' p_max2 p_cur2) *)
+  (*          b ofs pmap1 pmap2 pmap3 *)
+  (*          (Hrace12: permMapsDisjoint pmap1 pmap2) *)
+  (*          (Hrace13: permMapsDisjoint pmap1 pmap3) *)
+  (*          (Hrace23: permMapsDisjoint pmap2 pmap3) *)
+  (*          (Hnot_racy: not_racy p_cur1) *)
+  (*          (Hracy: racy (getPerm b ofs Cur pmap1)), *)
+  (*     permMapsDisjoint (setPerm p_cur1 p_max1 Hord1 b ofs pmap1) pmap3 *)
+  (*     /\ permMapsDisjoint (setPerm p_cur2 p_max2 Hord2 b ofs pmap2) pmap3. *)
+  (* Proof. *)
+  (*   intros. *)
+  (*   unfold permMapsDisjoint in *. *)
+  (*   split. *)
+  (*   { intros b' ofs'. *)
+  (*     apply not_racy_union with (p2 := getPerm b' ofs' Cur pmap3) in Hnot_racy. *)
+  (*     simpl. rewrite Maps.PMap.gsspec. *)
+  (*     destruct (Coqlib.peq b' b); auto. *)
+  (*     subst. destruct (Coqlib.zeq ofs ofs'); simpl; auto. *)
+  (*   } *)
+  (*   { intros b' ofs'. *)
+  (*     destruct (Pos.eq_dec b b'). *)
+  (*     - subst.  *)
+  (*       destruct (Z.eq_dec ofs ofs'). *)
+  (*       + subst. *)
+  (*         assert (Hnot_racy3: not_racy (getPerm b' ofs' Cur pmap3)). *)
+  (*         { eapply no_race_racy. eapply Hracy. *)
+  (*           unfold getPerm. auto. *)
+  (*         } *)
+  (*         rewrite perm_union_comm. apply not_racy_union. *)
+  (*         unfold getPerm in *.  auto. *)
+  (*       + rewrite <- setPerm_correct; auto. *)
+  (*     - rewrite <- setPerm_correct; auto. *)
+  (*   } *)
+  (* Qed. *)
+        
 End permMapDefs.
 
 (* Computation of a canonical form of permission maps where the

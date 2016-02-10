@@ -1965,20 +1965,19 @@ Section Corestep.
                (Htid0_lt_pf :  tid0 < num_threads tp),
           let: tid := Ordinal Htid0_lt_pf in
           forall
-            (Hrace: race_free tp)
-            (Hcanonical: forall tid, isCanonical (perm_maps tp tid))
-            (Heq: sval (permMapsUnion Hcanonical Hrace) = (getPermMap m))
+            (Hinv: invariant tp)
+            (Heq: sval (permMapsUnion (canonical Hinv) (no_race Hinv)) = (getPermMap m))
             (Hthread: getThreadC tp tid = Krun c)
             (Hrestrict_pmap:
-               restrPermMap Heq (permMapsInv_lt
-                                   (svalP (permMapsUnion Hcanonical Hrace)) tid) = m1)
+               restrPermMap
+                 Heq (permMapsInv_lt
+                        (svalP (permMapsUnion (canonical Hinv) (no_race Hinv))) tid) = m1)
             (Hcorestep: corestepN the_sem the_ge (S 0) c m1 c' m1')
             (Htp': tp' = updThread tp tid (Krun c') (getPermMap m1') n),
-            let: Hinv_pf := schedNext_inv (updThread_invariants
-                                             c (S 0) Hcanonical Hrace
-                                             Hrestrict_pmap Hcorestep Htp')  in
+            let: Hinv_pf := schedNext_inv (updThread_invariants Hinv
+                                             Hrestrict_pmap Hthread Hcorestep Htp')  in
             forall
-              (Hinv': permMapsUnion (proj1 Hinv_pf) (proj2 Hinv_pf) = pnew)
+              (Hinv': permMapsUnion (canonical Hinv_pf) (no_race Hinv_pf) = pnew)
               (Hupd_mem: updPermMap m1' (sval pnew) = Some m'),
               fstep tp m (schedNext tp') m'
 
@@ -1996,107 +1995,207 @@ Section Corestep.
             fstep tp m (schedNext (updThreadC tp tid (Kstage ef args c))) m
 
   | fstep_lock :
-      forall tp tp' m m1 c m1' c' m' b ofs pmap1 pnew,
+      forall tp tp' m m1 c m1' c' m' b ofs pnew,
         let: n := counter tp in
         forall tid0
                (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 < num_threads tp),
+               (Htid0_lt_pf : tid0 < num_threads tp)
+               (pf_lp : 0 < num_threads tp),
           let: tid := Ordinal Htid0_lt_pf in
+          let: lp := Ordinal pf_lp in
           forall
             (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
-            (Hrace: race_free tp)
-            (Hcanonical: forall tid, isCanonical (perm_maps tp tid))
-            (Heq: sval (permMapsUnion Hcanonical Hrace) = (getPermMap m))
-            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hinv: invariant tp)
+            (Heq: sval (permMapsUnion (canonical Hinv) (no_race Hinv)) = getPermMap m)
             (Hrestrict_pmap:
                restrPermMap Heq (permMapsInv_lt
-                                   (svalP (permMapsUnion Hcanonical Hrace)) tid) = m1)
+                                  (svalP (permMapsUnion (canonical Hinv) (no_race Hinv))) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one))
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m1')
             (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
             (Hangel_wf: permMap_wf tp (aggelos n) tid0)
             (Hangel_canonical: isCanonical (aggelos n))
             (Htp': tp' = updThread tp tid (Krun c') (aggelos n) (n+1)),
-            let: Hinv_pf := updThread_ext_invariants Hcanonical Hrace Hangel_wf Hangel_canonical Htp' in
+            let: Hinv_pf := updThread_ext_invariants
+                              Hinv Hangel_wf Hangel_canonical
+                              (ex_intro (fun t =>
+                                           getThreadC tp tid =
+                                           Kstage t.1 t.2.1 t.2.2)
+                                        (LOCK, (Vptr b ofs::nil, c)) Hthread)
+                              Htp' in
             forall
-              (Hinv': permMapsUnion (proj1 Hinv_pf) (proj2 Hinv_pf) = pnew)
+              (Hinv': permMapsUnion (canonical Hinv_pf) (no_race Hinv_pf) = pnew)
               (Hupd_mem: updPermMap m1' (sval pnew) = Some m'),
               fstep tp m (schedNext tp') m'
-                    
+                   
   | fstep_unlock :
-      forall tp tp' m m1 c m1' c' m' b ofs pmap1 pnew,
+      forall tp tp' m m1 c m1' c' m' b ofs pnew,
         let: n := counter tp in
         forall tid0
                (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 < num_threads tp),
+               (Htid0_lt_pf : tid0 < num_threads tp)
+               (pf_lp : 0 < num_threads tp),
           let: tid := Ordinal Htid0_lt_pf in
+          let: lp := Ordinal pf_lp in
           forall
             (Hthread: getThreadC tp tid = Kstage UNLOCK (Vptr b ofs::nil) c)
-            (Hrace: race_free tp)
-            (Hcanonical: forall tid, isCanonical (perm_maps tp tid))
-            (Heq: sval (permMapsUnion Hcanonical Hrace) = (getPermMap m))
-            (Hpmap: getThreadPerm tp tid = pmap1)
+            (Hinv: invariant tp)
+            (Heq: sval (permMapsUnion (canonical Hinv) (no_race Hinv)) = getPermMap m)
             (Hrestrict_pmap:
                restrPermMap Heq (permMapsInv_lt
-                                   (svalP (permMapsUnion Hcanonical Hrace)) tid) = m1)
+                                   (svalP (permMapsUnion (canonical Hinv) (no_race Hinv))) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero))
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.one) = Some m1')
-            (Hafter_external: semantics.after_external the_sem
-                                                       (Some (Vint Int.zero)) c = Some c')
+            (* what does the return value denote?*)
+            (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
             (Hangel_wf: permMap_wf tp (aggelos n) tid0)
             (Hangel_canonical: isCanonical (aggelos n))
             (Htp': tp' = updThread tp tid (Krun c') (aggelos n) (n+1)),
-            let: Hinv_pf := updThread_ext_invariants Hcanonical Hrace
-                                                     Hangel_wf Hangel_canonical Htp' in
+            let: Hinv_pf := updThread_ext_invariants
+                              Hinv Hangel_wf Hangel_canonical
+                              (ex_intro (fun t =>
+                                           getThreadC tp tid =
+                                           Kstage t.1 t.2.1 t.2.2)
+                                        (UNLOCK, (Vptr b ofs::nil, c)) Hthread)
+                              Htp' in
             forall
-              (Hinv': permMapsUnion (proj1 Hinv_pf) (proj2 Hinv_pf) = pnew)
+              (Hinv': permMapsUnion (canonical Hinv_pf) (no_race Hinv_pf) = pnew)
               (Hupd_mem: updPermMap m1' (sval pnew) = Some m'),
               fstep tp m (schedNext tp') m'
-
+                   
   | fstep_create :
       forall tp tp_upd tp' m m' c c' c_new vf arg pnew,
         let: n := counter tp in
         forall tid0
                (Hsched: List.hd_error (schedule tp) = Some tid0)
-               (Htid0_lt_pf :  tid0 < num_threads tp),
+               (Htid0_lt_pf : tid0 < num_threads tp),
           let: tid := Ordinal Htid0_lt_pf in
           forall
             (Hthread: getThreadC tp tid = Kstage CREATE (vf::arg::nil) c)
-            (Hrace: race_free tp)
-            (Hcanonical: forall tid, isCanonical (perm_maps tp tid))
+            (Hinv: invariant tp)
             (Hinitial: semantics.initial_core the_sem the_ge vf (arg::nil) = Some c_new)
             (Hafter_external: semantics.after_external the_sem
                                                        (Some (Vint Int.zero)) c = Some c')
             (Hangel_wf: permMap_wf tp (aggelos n) tid0)
             (Hangel_canonical: isCanonical (aggelos n))
             (Htp': tp_upd = updThread tp tid (Krun c') (aggelos n) (n.+2)),
-            let: Hinv_pf := updThread_ext_invariants Hcanonical Hrace Hangel_wf Hangel_canonical Htp' in
+            let: Hinv_pf := updThread_ext_invariants Hinv Hangel_wf Hangel_canonical
+                                                     (ex_intro (fun t =>
+                                                                  getThreadC tp tid =
+                                                                  Kstage t.1 t.2.1 t.2.2)
+                                                               (CREATE, (vf::arg::nil, c)) Hthread)
+                                                     Htp' in
             forall
               (Hangel_wf2: newPermMap_wf tp_upd (aggelos (n.+1)))
               (Hangel_canonical2: isCanonical (aggelos (n.+1)))
               (Htp': tp' = addThread tp_upd (Krun c_new) (aggelos n.+1)),
-              let:  Hinv'_pf := addThread_ext_invariants (proj1 Hinv_pf) (proj2 Hinv_pf)
+              let:  Hinv'_pf := addThread_ext_invariants Hinv_pf
                                                          Hangel_wf2 Hangel_canonical2 Htp' in
               forall
-                (Hinv': permMapsUnion (proj1 Hinv'_pf) (proj2 Hinv'_pf) = pnew)
+                (Hinv': permMapsUnion (canonical Hinv'_pf) (no_race Hinv'_pf) = pnew)
                 (Hupd_mem: updPermMap m (sval pnew) = Some m'),
                 fstep tp m (schedNext tp') m'
 
+  | fstep_mklock :
+      forall tp tp' tp'' m m1 c m1' c' m' b ofs pmap_tid' pmap_lp pnew,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf : tid0 < num_threads tp)
+               (pf_lp : 0 < num_threads tp)
+               (pf_lp' : 0 < num_threads tp'),
+          let: tid := Ordinal Htid0_lt_pf in
+          let: lp := Ordinal pf_lp in
+          let: lp' := Ordinal pf_lp' in
+          let: pmap_tid := getThreadPerm tp tid in
+          forall
+            (Hthread: getThreadC tp tid = Kstage MKLOCK (Vptr b ofs::nil) c)
+            (Hinv: invariant tp)
+            (Heq: sval (permMapsUnion (canonical Hinv) (no_race Hinv)) = getPermMap m)
+            (Hrestrict_pmap:
+               restrPermMap Heq (permMapsInv_lt
+                                   (svalP (permMapsUnion (canonical Hinv) (no_race Hinv))) tid) = m1)
+            (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m1')
+            (Hdrop_perm:
+               setPerm (Some Nonempty) (getPerm b (Int.intval ofs) Max pmap_tid)
+                       (store_perm_order b ofs Hinv Hrestrict_pmap Hstore)
+                       b (Int.intval ofs) pmap_tid = pmap_tid')
+            (Hlp_perm: setPerm (Some Writable) (Some Freeable) (perm_F_any Writable)
+                               b (Int.intval ofs) (getThreadPerm tp lp) = pmap_lp)
+            (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
+            (Htp': tp' = updThread tp tid (Krun c') pmap_tid' (n+1))
+            (Htp'': tp'' = updThreadP tp' lp' pmap_lp),
+            let: Hinv_pf := mklock_inv ofs pf_lp Hinv Hrestrict_pmap
+                                       Hstore Hdrop_perm Hlp_perm
+                                       (ex_intro (fun t =>
+                                                    getThreadC tp tid =
+                                                    Kstage t.1 t.2.1 t.2.2)
+                                                 (MKLOCK, (Vptr b ofs::nil, c)) Hthread)
+                                       Htp' Htp'' in
+            forall
+              (Hinv': permMapsUnion (canonical Hinv_pf) (no_race Hinv_pf) = pnew)
+              (Hupd_mem: updPermMap m1' (sval pnew) = Some m'),
+              fstep tp m (schedNext tp'') m'
+                      
+  | fstep_freelock :
+      forall tp tp' tp'' m m1 c m1' c' m' b ofs pmap_lp' pnew,
+        let: n := counter tp in
+        forall tid0
+               (Hsched: List.hd_error (schedule tp) = Some tid0)
+               (Htid0_lt_pf : tid0 < num_threads tp)
+               (pf_lp : 0 < num_threads tp)
+               (pf_lp' : 0 < num_threads tp'),
+          let: tid := Ordinal Htid0_lt_pf in
+          let: lp := Ordinal pf_lp in
+          let: lp' := Ordinal pf_lp' in
+          let: pmap_lp := getThreadPerm tp lp in
+          forall
+            (Hthread: getThreadC tp tid = Kstage FREE_LOCK (Vptr b ofs::nil) c)
+            (Hinv: invariant tp)
+            (Heq: sval (permMapsUnion (canonical Hinv) (no_race Hinv)) = getPermMap m)
+            (Hrestrict_pmap:
+               restrPermMap Heq (permMapsInv_lt
+                                   (svalP (permMapsUnion (canonical Hinv) (no_race Hinv))) tid) = m1)
+            (Hdrop_perm: setPerm None (Some Freeable) I b (Int.intval ofs) pmap_lp = pmap_lp')
+            (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
+            (*the angel must provide the permissions for the thread - freeable or writeable *)
+            (Hangel_wf: permMap_wf tp (aggelos n) tid0)
+            (Hangel_canonical: isCanonical (aggelos n))
+            (Htp': tp' = updThread tp tid (Krun c') (aggelos n) (n+1))            
+            (Htp'': tp'' = updThreadP tp' lp' pmap_lp'),
+            let: Hinv_pf := freelock_inv ofs pf_lp Hinv Hrestrict_pmap Hdrop_perm Hangel_wf
+                                         Hangel_canonical
+                                         (ex_intro (fun t =>
+                                                      getThreadC tp tid =
+                                                      Kstage t.1 t.2.1 t.2.2)
+                                                   (FREE_LOCK, (Vptr b ofs::nil, c)) Hthread)
+                                         Htp' Htp'' in
+               forall
+                 (Hinv': permMapsUnion (canonical Hinv_pf) (no_race Hinv_pf) = pnew)
+                 (Hupd_mem: updPermMap m1' (sval pnew) = Some m'),
+                 fstep tp m (schedNext tp'') m'
+                      
   | fstep_lockfail :
-      forall tp m c b ofs tid0
+      forall tp m c b ofs tid0 m1
              (Hsched: List.hd_error (schedule tp) = Some tid0)
-             (Htid0_lt_pf :  tid0 < num_threads tp),
+             (Htid0_lt_pf :  tid0 < num_threads tp)
+             (pf_lp : 0 < num_threads tp),
         let: tid := Ordinal Htid0_lt_pf in
+        let: lp := Ordinal pf_lp in
         forall
           (Hthread: getThreadC tp tid = Kstage LOCK (Vptr b ofs::nil) c)
-          (Hinv: permMapsInv tp (getPermMap m))
-          (Htest: load_unsafe Mint32 m b (Int.intval ofs) = Vint Int.zero),
+          (Hinv: invariant tp)
+          (Heq: sval (permMapsUnion (canonical Hinv) (no_race Hinv)) = getPermMap m)
+          (Hrestrict_pmap:
+             restrPermMap Heq (permMapsInv_lt
+                                 (svalP (permMapsUnion (canonical Hinv) (no_race Hinv))) lp) = m1)
+          (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
           fstep tp m (schedNext tp) m
-                
+               
   | fstep_schedfail :
       forall tp m tid0
              (Hsched: List.hd_error (schedule tp) = Some tid0)
-             (Htid0_lt_pf :  tid0 >= num_threads tp),
+             (Htid0_lt_pf : tid0 >= num_threads tp),
         fstep tp m (schedNext tp) m.
   
 End Corestep.

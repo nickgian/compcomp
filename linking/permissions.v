@@ -6,45 +6,13 @@ Require Import Integers.
 Require Import ZArith.
 Require Import threads_lemmas.
 
-Definition access_map := Maps.PMap.t (Z -> perm_kind -> option permission).
-
-Module PermMap. Section PermMap.
-                  
-(* Per-thread permission maps. Debatable whether we want a nextblock field *)
-Record t := mk
-  { next : block
-  ;  map : access_map 
-  ;  max : forall (b : positive) (ofs : Z),
-                 Mem.perm_order'' (Maps.PMap.get b map ofs Max)
-                 (Maps.PMap.get b map ofs Cur)
-  ; nextblock : forall (b : positive) (ofs : Z) (k : perm_kind),
-                       ~ Coqlib.Plt b next -> Maps.PMap.get b map ofs k = None
-  }. 
-
-End PermMap. End PermMap.
+Definition access_map := Maps.PMap.t (Z -> option permission).
 
 Section permMapDefs.
  
   Definition empty_map : access_map :=
-    (fun z p => None, Maps.PTree.empty (Z -> perm_kind -> option permission)).
-  
-  Lemma max_empty : forall b ofs, Mem.perm_order'' (Maps.PMap.get b empty_map ofs Max)
-                                                   (Maps.PMap.get b empty_map ofs Cur).
-  Proof.
-    intros. unfold Maps.PMap.get. rewrite Maps.PTree.gempty. constructor.
-  Qed.
-
-  Lemma nextblock_empty : forall (b : positive) (ofs : Z) (k : perm_kind),
-         ~ Coqlib.Plt b 1 -> Maps.PMap.get b empty_map ofs k = None.
-  intros. unfold Maps.PMap.get. now rewrite Maps.PTree.gempty.
-  Qed.
-
-  Definition emptyPermMap :=
-    {| PermMap.next := 1%positive;
-       PermMap.map := empty_map;
-       PermMap.max := max_empty;
-       PermMap.nextblock := nextblock_empty |}.
-
+    (fun z => None, Maps.PTree.empty (Z -> option permission)).
+ 
   (* Some None represents the empty permission. None is used for
   permissions that conflict/race. *)
      
@@ -161,134 +129,68 @@ Section permMapDefs.
       Mem.perm_order'' (perm_max p1m p2m) pu.
   Admitted.
 
-  (* Update the memory with a new permission map (of the same size) *)
-  Definition updPermMap (m : mem) (p : PermMap.t) : option mem.
-    refine (match positive_eq_dec (Mem.nextblock m) (PermMap.next p) with
-      | left pf => 
-        Some (Mem.mkmem 
-                (Mem.mem_contents m) 
-                (PermMap.map p) 
-                (PermMap.next p)
-                (PermMap.max p) 
-                (PermMap.nextblock p)
-                (Mem.contents_default m))
-      | right _ => None
-            end).
-    Defined.
+  Definition getMaxPerm (m : mem) : access_map :=
+    Maps.PMap.map (fun f => fun ofs => f ofs Max) (Mem.mem_access m).
 
-    Definition getPermMap (m : mem) :=
-    {| PermMap.next := Mem.nextblock m;
-       PermMap.map := Mem.mem_access m;
-       PermMap.max := Mem.access_max m;
-       PermMap.nextblock := Mem.nextblock_noaccess m
-    |}.
+  Definition getCurPerm (m : mem) : access_map :=
+    Maps.PMap.map (fun f => fun ofs => f ofs Cur) (Mem.mem_access m).
 
-    (* Currently unused definition of what it union of two permission maps means*)
-    Inductive isUnionPermMaps : PermMap.t -> PermMap.t -> PermMap.t -> Prop :=
-    | PMapsUnion :
-        forall pmap1 pmap2 pmap3
-               (Hnext:
-                  (Coqlib.Plt (PermMap.next pmap1) (PermMap.next pmap2) ->
-                   PermMap.next pmap3 = PermMap.next pmap1)
-                  /\ (~ Coqlib.Plt (PermMap.next pmap1) (PermMap.next pmap2) ->
-                      PermMap.next pmap3 = PermMap.next pmap2))
-               (HmapCur: forall (b : positive) (ofs : Z) (p1 p2 : option permission),
-                           Maps.PMap.get b (PermMap.map pmap1) ofs Cur = p1 ->
-                           Maps.PMap.get b (PermMap.map pmap2) ofs Cur = p2 ->
-                           exists p3, perm_union p1 p2 = Some p3 /\
-                           Maps.PMap.get b (PermMap.map pmap3) ofs Cur = p3)
-               (HmapMax: forall (b : positive) (ofs : Z) (p1 p2 : option permission),
-                           Maps.PMap.get b (PermMap.map pmap1) ofs Max = p1 ->
-                           Maps.PMap.get b (PermMap.map pmap2) ofs Max = p2 ->
-                           Maps.PMap.get b (PermMap.map pmap3) ofs Max = perm_max p1 p2),
-          isUnionPermMaps pmap1 pmap2 pmap3.
- 
-Definition permMapsDisjoint pmap1 pmap2 : Prop :=
-  forall b ofs, exists pu,
-    perm_union (Maps.PMap.get b (PermMap.map pmap1) ofs Cur)
-               (Maps.PMap.get b (PermMap.map pmap2) ofs Cur) = Some pu.
-
-Lemma permMapsDisjoint_comm :
-  forall pmap1 pmap2
-    (Hdis: permMapsDisjoint pmap1 pmap2),
-    permMapsDisjoint pmap2 pmap1.
-Proof.
-  unfold permMapsDisjoint in *.
-  intros. destruct (Hdis b ofs) as [pu Hpunion].
-  rewrite perm_union_comm in Hpunion.
-  eexists; eauto.
-Qed.
-
-Lemma disjoint_norace:
-  forall (mi mj : mem) (b : block) (ofs : Z)
-         (Hdisjoint: permMapsDisjoint (getPermMap mi) (getPermMap mj))
-         (Hpermj: Mem.perm mj b ofs Cur Readable)
-         (Hpermi: Mem.perm mi b ofs Cur Writable),
-    False.
-Proof.
-  intros.
-  unfold Mem.perm, Mem.perm_order' in *.
-  unfold permMapsDisjoint, getPermMap in Hdisjoint. simpl in Hdisjoint.
-  destruct (Hdisjoint b ofs) as [pu Hunion].
-  clear Hdisjoint.
-  destruct (Maps.PMap.get b (Mem.mem_access mj) ofs Cur) as [pj|] eqn:Hpj;
-    auto.
-  destruct (Maps.PMap.get b (Mem.mem_access mi) ofs Cur) as [pi|] eqn:Hpi;
-    auto.
-  inversion Hpermi; inversion Hpermj; subst; simpl in Hunion;
-  discriminate.
-Qed.
-
-Definition isCanonical pmap := (PermMap.map pmap).1 = fun _ _ => None.
-
-Definition permMapLt pmap1 pmap2 : Prop :=
-  ~ Coqlib.Plt (PermMap.next pmap2) (PermMap.next pmap1)
-  /\ (forall b ofs,
-        Mem.perm_order'' (Maps.PMap.get b (PermMap.map pmap2) ofs Cur)
-                         (Maps.PMap.get b (PermMap.map pmap1) ofs Cur))
-  /\ (forall b ofs,
-        Mem.perm_order''
-          (Maps.PMap.get b (PermMap.map pmap2) ofs Max)
-          (Maps.PMap.get b (PermMap.map pmap1) ofs Max)).
-
-Definition setPerm (p_cur p_max : option permission)
-           (Hord: Mem.perm_order'' p_max p_cur) (b : block)
-           (ofs : Z) (pmap : PermMap.t) : PermMap.t.
-  refine ({| PermMap.next := Pos.max (PermMap.next pmap) b;
-             PermMap.map :=
-               Maps.PMap.set b
-                             (fun ofs' k =>
-                                match k with
-                                  | Max =>
-                                    if Coqlib.zeq ofs ofs' then
-                                      p_max
-                                    else
-                                      Maps.PMap.get b (PermMap.map pmap) ofs' k
-                                  | Cur =>
-                                  if Coqlib.zeq ofs ofs' then
-                                    p_cur
-                                  else Maps.PMap.get b (PermMap.map pmap) ofs' k
-                                end)
-                             (PermMap.map pmap);
-             PermMap.max := _;
-             PermMap.nextblock := _ |}).
+  Definition getPermMap (m : mem) : Maps.PMap.t (Z -> perm_kind -> option permission) :=
+    Mem.mem_access m.
+  
+  Definition permMapsDisjoint (pmap1 pmap2 : access_map) : Prop :=
+    forall b ofs, exists pu,
+      perm_union ((Maps.PMap.get b pmap1) ofs)
+                 ((Maps.PMap.get b pmap2) ofs) = Some pu.
+  
+  Lemma permMapsDisjoint_comm :
+    forall pmap1 pmap2
+      (Hdis: permMapsDisjoint pmap1 pmap2),
+      permMapsDisjoint pmap2 pmap1.
   Proof.
-    { intros b' ofs'.
-      destruct (Pos.eq_dec b b') as [Hblock_eq | Hblock_neq].
-      - subst.
-        destruct (Z.eq_dec ofs ofs') as [Hofs_eq | Hofs_neq] eqn:Hofs;
-          subst; unfold Coqlib.zeq;
-          rewrite Maps.PMap.gss; rewrite Hofs; simpl. assumption.
-        destruct pmap; auto.
-      - rewrite Maps.PMap.gso; auto.
-        destruct pmap; auto.
-    }
-    { intros b' ofs' k Hplt.
-      admit.
-    }
-  Defined.
+    unfold permMapsDisjoint in *.
+    intros. destruct (Hdis b ofs) as [pu Hpunion].
+    rewrite perm_union_comm in Hpunion.
+    eexists; eauto.
+  Qed.
 
-  Inductive SetPerm b ofs : PermMap.t -> PermMap.t -> Prop :=
+  Lemma disjoint_norace:
+    forall (mi mj : mem) (b : block) (ofs : Z)
+      (Hdisjoint: permMapsDisjoint (getMaxPerm mi) (getMaxPerm mj))
+      (Hpermj: Mem.perm mj b ofs Max Readable)
+      (Hpermi: Mem.perm mi b ofs Max Writable),
+      False.
+  Proof.
+    intros.
+    unfold Mem.perm, Mem.perm_order' in *.
+    unfold permMapsDisjoint, getMaxPerm in Hdisjoint. simpl in Hdisjoint.
+    destruct (Hdisjoint b ofs) as [pu Hunion].
+    clear Hdisjoint.
+    do 2 rewrite Maps.PMap.gmap in Hunion.
+    destruct (Maps.PMap.get b (Mem.mem_access mj) ofs Max) as [pj|] eqn:Hpj;
+      auto.
+    destruct (Maps.PMap.get b (Mem.mem_access mi) ofs Max) as [pi|] eqn:Hpi;
+      auto.
+    inversion Hpermi; inversion Hpermj; subst; simpl in Hunion;
+    discriminate.
+  Qed.
+
+  Definition isCanonical (pmap : access_map) := pmap.1 = fun _ => None.
+  
+  Definition permMapLt (pmap1 pmap2 : access_map) : Prop :=
+    forall b ofs,
+      Mem.perm_order'' (Maps.PMap.get b pmap2 ofs)
+                       (Maps.PMap.get b pmap1 ofs).
+  
+  Definition setPerm (p : option permission) (b : block)
+             (ofs : Z) (pmap : access_map) : access_map :=
+    Maps.PMap.set b (fun ofs' => if Coqlib.zeq ofs ofs' then
+                                p
+                              else
+                                Maps.PMap.get b pmap ofs')
+                  pmap.
+
+  (*Inductive SetPerm b ofs : PermMap.t -> PermMap.t -> Prop :=
   | set: forall pmap1 pmap2 b' ofs' k,
            b <> b' \/ (b = b' /\ ofs <> ofs') ->
            Maps.PMap.get b' (PermMap.map pmap1) ofs' k =
@@ -401,7 +303,7 @@ Definition setPerm (p_cur p_max : option permission)
         [rewrite perm_union_comm; apply not_racy_union|]; auto. 
     - rewrite Maps.PMap.gso; auto.
   Qed.
-
+*)
   (* Lemma setPerm_noracy2 : *)
   (*   forall p_cur1 p_cur2 p_max1 p_max2 *)
   (*          (Hord1: Mem.perm_order'' p_max1 p_cur1) *)
@@ -444,6 +346,7 @@ End permMapDefs.
 
 (* Computation of a canonical form of permission maps where the
      default element is a function to the empty permission *)
+(*
 Section CanonicalPMap.
 
   Import Maps BlockList.
@@ -700,4 +603,4 @@ Section CanonicalPMap.
       }
     Defined.
 
-End CanonicalPMap.
+End CanonicalPMap. *)

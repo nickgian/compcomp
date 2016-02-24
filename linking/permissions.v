@@ -156,20 +156,20 @@ Section permMapDefs.
 
   Lemma disjoint_norace:
     forall (mi mj : mem) (b : block) (ofs : Z)
-      (Hdisjoint: permMapsDisjoint (getMaxPerm mi) (getMaxPerm mj))
-      (Hpermj: Mem.perm mj b ofs Max Readable)
-      (Hpermi: Mem.perm mi b ofs Max Writable),
+      (Hdisjoint: permMapsDisjoint (getCurPerm mi) (getCurPerm mj))
+      (Hpermj: Mem.perm mj b ofs Cur Readable)
+      (Hpermi: Mem.perm mi b ofs Cur Writable),
       False.
   Proof.
     intros.
     unfold Mem.perm, Mem.perm_order' in *.
-    unfold permMapsDisjoint, getMaxPerm in Hdisjoint. simpl in Hdisjoint.
+    unfold permMapsDisjoint, getCurPerm in Hdisjoint. simpl in Hdisjoint.
     destruct (Hdisjoint b ofs) as [pu Hunion].
     clear Hdisjoint.
     do 2 rewrite Maps.PMap.gmap in Hunion.
-    destruct (Maps.PMap.get b (Mem.mem_access mj) ofs Max) as [pj|] eqn:Hpj;
+    destruct (Maps.PMap.get b (Mem.mem_access mj) ofs Cur) as [pj|] eqn:Hpj;
       auto.
-    destruct (Maps.PMap.get b (Mem.mem_access mi) ofs Max) as [pi|] eqn:Hpi;
+    destruct (Maps.PMap.get b (Mem.mem_access mi) ofs Cur) as [pi|] eqn:Hpi;
       auto.
     inversion Hpermi; inversion Hpermj; subst; simpl in Hunion;
     discriminate.

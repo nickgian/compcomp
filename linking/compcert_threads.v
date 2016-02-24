@@ -309,8 +309,7 @@ Proof.
   unfold permMapLt; auto.
 Qed.
 
-Definition restrPermMap p' m (Hcanonical: isCanonical p')
-           (Hlt: permMapLt p' (getMaxPerm m)) : mem.
+Definition restrPermMap p' m (Hlt: permMapLt p' (getMaxPerm m)) : mem.
 Proof.
   refine ({|
              Mem.mem_contents := Mem.mem_contents m;
@@ -379,37 +378,55 @@ Proof.
 Defined.
     
 Lemma restrPermMap_nextblock :
-  forall p' m (Hcanonical: isCanonical p') (Hlt: permMapLt p' (getMaxPerm m)),
-    Mem.nextblock (restrPermMap Hcanonical Hlt) = Mem.nextblock m.
+  forall p' m (Hlt: permMapLt p' (getMaxPerm m)),
+    Mem.nextblock (restrPermMap Hlt) = Mem.nextblock m.
 Proof.
   intros. unfold restrPermMap. reflexivity.
 Qed.
 
 Lemma restrPermMap_irr : forall p' p'' m
-                                (Hcanonical: isCanonical p')
-                                (Hcanonical': isCanonical p'')
                                 (Hlt : permMapLt p' (getMaxPerm m))
                                 (Hlt': permMapLt p'' (getMaxPerm m))
                                 (Heq_new: p' = p''),
-                           restrPermMap Hcanonical Hlt = restrPermMap Hcanonical' Hlt'.
+                           restrPermMap Hlt = restrPermMap Hlt'.
 Proof.
   intros. subst.
   apply f_equal. by apply proof_irr.
 Qed.
 
-(* Lemma restrPermMap_disjoint_inv: *)
-(*   forall (mi mj m : mem) (pi pj : access_map) *)
-(*          (Hcanonicali: isCanonical pi) (Hcanonicalj: isCanonical pj) *)
-(*          (Hltj: permMapLt pj (getPermMap m)) (Hlti: permMapLt pi (getPermMap m)) *)
-(*          (Hdisjoint: permMapsDisjoint pi pj) *)
-(*          (Hrestrj: restrPermMap Hcanonicalj Hltj = mj) *)
-(*          (Hrestri: restrPermMap Hcanonicali Hlti = mi), *)
-(*     permMapsDisjoint (getPermMap mi) (getPermMap mj). *)
-(* Proof. *)
-(*   intros. rewrite <- Hrestri. rewrite <- Hrestrj. *)
-(*   unfold restrPermMap, getPermMap, permMapsDisjoint. simpl. *)
-(*   auto. *)
-(* Qed. *)
+Lemma restrPermMap_disjoint_inv:
+  forall (mi mj m : mem) (pi pj : access_map)
+    (Hcan_m: isCanonical (getMaxPerm m))
+    (Hltj: permMapLt pj (getMaxPerm m))
+    (Hlti: permMapLt pi (getMaxPerm m))
+    (Hdisjoint: permMapsDisjoint pi pj)
+    (Hrestrj: restrPermMap Hltj = mj)
+    (Hrestri: restrPermMap Hlti = mi),
+    permMapsDisjoint (getCurPerm mi) (getCurPerm mj).
+Proof.
+  intros. rewrite <- Hrestri. rewrite <- Hrestrj.
+  unfold restrPermMap, getCurPerm, permMapsDisjoint. simpl in *.
+  intros b ofs.
+  do 2 rewrite Maps.PMap.gmap.
+  clear Hrestrj Hrestri.
+  unfold permMapLt, Mem.perm_order'' in *.
+  specialize (Hltj b ofs); specialize (Hlti b ofs).
+  unfold getMaxPerm in *; simpl in *.
+  rewrite Maps.PMap.gmap in Hlti, Hltj.
+  unfold permMapsDisjoint, Maps.PMap.get in *; simpl in *.
+  do 2 rewrite Maps.PTree.gmap. unfold Coqlib.option_map.
+  specialize (Hdisjoint b ofs).
+  assert (Hnone: (Mem.mem_access m).1 ofs Max = None)
+    by (unfold isCanonical in Hcan_m; simpl in Hcan_m;
+          by apply equal_f with (x:=ofs) in Hcan_m).
+  destruct (Maps.PTree.get b (Mem.mem_access m).2) eqn:?; auto.
+  rewrite Hnone in Hlti, Hltj;
+  destruct (Maps.PTree.get b pi.2) as [f1 |] eqn:?;
+  destruct (Maps.PTree.get b pj.2) as [f2|] eqn:?;
+   repeat match goal with
+     | [H: match ?Expr with _ => _ end |- _] => destruct Expr
+   end; tauto.
+Qed.
   
 (* Lemma updPermMap_nextblock : *)
 (*   forall (m : mem) (p : PermMap.t) m' *)
@@ -530,8 +547,7 @@ Module Concur.
         (Hcanonical: isCanonical (perm_maps tp tid))
         (Hlt: permMapLt (perm_maps tp tid) (getMaxPerm m))
         (Hcompatible: mem_compatible tp m)
-        (Hrestrict: restrPermMap Hcanonical
-                                      (permMapsInv_lt (perm_comp Hcompatible) tid) = m')
+        (Hrestrict: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m')
         (Hrace : race_free tp),
         permMap_wf tp (getCurPerm m') (nat_of_ord tid).
     Proof.
@@ -547,18 +563,17 @@ Module Concur.
       unfold isCanonical in Hcan_mem.
       unfold getMaxPerm in Hcan_mem. simpl in Hcan_mem.
       intros b ofs. specialize (Hrace b ofs).
-      rewrite Maps.PMap.gmap.
+      rewrite Maps.PMap.gmap. unfold getThreadPerm in *.
       
       unfold Maps.PMap.get in *. simpl.
       unfold isCanonical in Hcanonical. rewrite Hcanonical in Hrace.
       rewrite Maps.PTree.gmap. unfold Coqlib.option_map.
-      destruct (Maps.PTree.get b (Mem.mem_access m).2) eqn:?; auto.
+      destruct (Maps.PTree.get b (Mem.mem_access m).2) eqn:?;
       destruct (Maps.PTree.get b
-                               (perm_maps tp (Ordinal Htid)).2) eqn:?; auto.
-      simpl in Hrace. rewrite Hcanonical. auto.
-      
+                               (perm_maps tp (Ordinal Htid)).2) eqn:?;
+      try rewrite Hcanonical; auto.
       destruct (Maps.PTree.get b
-                 (perm_maps tp (Ordinal (n:=num_threads tp) (m:=tid) Htid)).2) eqn:?; auto.
+                               (perm_maps tp (Ordinal Htid')).2) eqn:?; auto.
       unfold permMapLt in Hlt.
       unfold Maps.PMap.get in Hlt.
       specialize (Hlt b ofs).
@@ -570,12 +585,13 @@ Module Concur.
       rewrite Hcan_mem in Hlt.
       unfold Mem.perm_order'' in Hlt. destruct (o ofs); auto.
       exfalso. auto.
+      rewrite perm_union_comm. apply not_racy_union. constructor.
     Defined.
     
     Lemma restrPermMap_can : forall (tp : thread_pool) (m m': mem) tid
                                (Hcanonical: isCanonical (perm_maps tp tid))
                                (Hlt: permMapLt (perm_maps tp tid) (getMaxPerm m))
-                               (Hrestrict: restrPermMap Hcanonical Hlt = m'),
+                               (Hrestrict: restrPermMap Hlt = m'),
                                isCanonical (getCurPerm m').
     Proof.
       intros. subst.
@@ -612,8 +628,7 @@ Module Concur.
         (Hinv: invariant tp)
         (Hcompatible: mem_compatible tp m)
         (Hthread: getThreadC tp tid = c)
-        (Hrestrict_pmap: restrPermMap ((canonical Hinv) tid)
-                                      (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
+        (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
         (Hcore: corestepN the_sem the_ge (S n) c m1 c' m1')
         (Htp': tp' = updThread tp tid c' (getCurPerm m1') counter),
         invariant tp'.
@@ -697,8 +712,7 @@ Module Concur.
           forall
             (Hinv: invariant tp)
             (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap ((canonical Hinv) tid)
-                                          (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
             (Hthread: getThreadC tp tid = c)
             (HcorestepN: corestepN the_sem the_ge (S n0) c m1 c' m')
             (Hcant: cant_step the_sem c')
@@ -714,8 +728,7 @@ Module Concur.
           forall
             (Hinv: invariant tp)
             (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap ((canonical Hinv) tid)
-                                          (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
             (Hthread: getThreadC tp tid = c)
             (HcorestepN: corestepN the_sem the_ge 1 c m1 c' m')
             (Htp': tp' = updThread tp tid c' (getCurPerm m') n),
@@ -736,8 +749,7 @@ Module Concur.
                            Some (LOCK, ef_sig LOCK, Vptr b ofs::nil))
             (Hinv: invariant tp)
             (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap ((canonical Hinv) lp)
-                                          (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one))
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m')
             (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
@@ -759,8 +771,7 @@ Module Concur.
                            Some (UNLOCK, ef_sig UNLOCK, Vptr b ofs::nil))
             (Hinv: invariant tp)
             (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap ((canonical Hinv) lp)
-                                          (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero))
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.one) = Some m')
             (* what does the return value denote?*)
@@ -807,8 +818,7 @@ Module Concur.
                            Some (MKLOCK, ef_sig MKLOCK, Vptr b ofs::nil))
             (Hinv: invariant tp)
             (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap ((canonical Hinv) tid)
-                                          (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m')
             (Hdrop_perm:
                setPerm (Some Nonempty) b (Int.intval ofs) pmap_tid = pmap_tid')
@@ -856,8 +866,7 @@ Module Concur.
                            Some (LOCK, ef_sig LOCK, Vptr b ofs::nil))
             (Hinv: invariant tp)
             (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap ((canonical Hinv) lp)
-                                          (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
             ext_step (tid0 :: sched) tp m sched tp m
                      
@@ -866,7 +875,8 @@ Module Concur.
           (Htid0_lt_pf : tid0 >= num_threads tp),
           ext_step (tid0 :: sched) tp m sched tp m.
 
-    Inductive step t_step : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop :=
+    Inductive step (t_step : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop)
+    : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop :=
     | step_core:
         forall tid sched tp tp' m m'
           (Ht_step: t_step (tid :: sched) tp m sched tp' m'),
@@ -891,16 +901,18 @@ Module Concur.
 
     End Concur.
     Section InitialCore.
-      Context {Sem : Modsem.t}.
+
+      Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
       Import ThreadPool.
 
-      Notation thread_pool := (ThreadPool.t Sem).
-      Notation the_sem := (Modsem.sem Sem).
+      Notation thread_pool := (t cT).
+      Notation perm_map := access_map.
       
       Definition at_external (st : (list nat) * thread_pool)
       : option (external_function * signature * seq val) := None.
 
-      Definition after_external (ov : option val) (st : list nat * thread_pool) : option (list nat * thread_pool) := None.
+      Definition after_external (ov : option val) (st : list nat * thread_pool) :
+        option (list nat * thread_pool) := None.
 
       Definition two_pos : pos := mkPos NPeano.Nat.lt_0_2.
       
@@ -909,52 +921,56 @@ Module Concur.
       (*not clear what the value of halted should be*)
       Definition halted (st : list nat * thread_pool) : option val := None.
 
-      Variable compute_init_perm : Genv.t (Modsem.F Sem) (Modsem.V Sem) -> PermMap.t.
+      Variable compute_init_perm : G -> access_map.
       Variable sched : list nat.
-      Variable lp_code : Modsem.C Sem.
+      Variable lp_code : cT.
       Hypothesis lp_halted : semantics.halted the_sem lp_code = Some (Vint Int.zero). 
 
-      Definition initial_core ge (f : val) (args : list val) : option (list nat * thread_pool) :=
-        match initial_core the_sem ge f args with
+      Definition initial_core the_ge (f : val) (args : list val) : option (list nat * thread_pool) :=
+        match initial_core the_sem the_ge f args with
           | None => None
           | Some c =>
             Some (sched, ThreadPool.mk
                            two_pos
-                           (fun tid => if tid == ord0 then Krun lp_code
-                                       else if tid == ord1 then Krun c
-                                            else Krun c (*bogus value; can't occur*))
-                           (fun tid => if tid == ord0 then emptyPermMap else
-                                         if tid == ord1 then compute_init_perm ge
-                                         else emptyPermMap)
+                           (fun tid => if tid == ord0 then lp_code
+                                       else if tid == ord1 then c
+                                            else c (*bogus value; can't occur*))
+                           (fun tid => if tid == ord0 then empty_map else
+                                         if tid == ord1 then compute_init_perm the_ge
+                                         else empty_map)
                            0)
         end.
 
-      Variable aggelos : nat -> PermMap.t.      
+      Variable aggelos : nat -> access_map.
 
-      Definition cstep' ge (st : list nat * thread_pool) m (st' : list nat * thread_pool) m' :=
-        step aggelos ge (fst st) (snd st) m (fst st') (snd st') m'.
+      Definition cstep (the_ge : G) (st : list nat * thread_pool) m
+                 (st' : list nat * thread_pool) m' :=
+        @step cT G the_sem the_ge aggelos (@coarse_step cT G the_sem the_ge)
+              (fst st) (snd st) m (fst st') (snd st') m'.
 
-      Definition fstep' ge (st : list nat * thread_pool) m (st' : list nat * thread_pool) m' :=
-        fstep aggelos ge (fst st) (snd st) m (fst st') (snd st') m'.
+      Definition fstep (the_ge : G) (st : list nat * thread_pool) m
+                 (st' : list nat * thread_pool) m' :=
+        @step cT G the_sem the_ge aggelos (@fine_step cT G the_sem the_ge)
+              (fst st) (snd st) m (fst st') (snd st') m'.
       
       Program Definition coarse_semantics :
-        CoreSemantics (Genv.t (Modsem.F Sem) (Modsem.V Sem)) (list nat * thread_pool) mem :=
+        CoreSemantics G (list nat * thread_pool) mem :=
         Build_CoreSemantics _ _ _
                             initial_core
                             at_external
                             after_external
                             halted
-                            cstep'
+                            cstep
                             _ _ _.
 
       Program Definition fine_semantics :
-        CoreSemantics (Genv.t (Modsem.F Sem) (Modsem.V Sem)) (list nat * thread_pool) mem :=
+        CoreSemantics G (list nat * thread_pool) mem :=
         Build_CoreSemantics _ _ _
                             initial_core
                             at_external
                             after_external
                             halted
-                            cstep'
+                            fstep
                             _ _ _.
 
     End InitialCore.
@@ -1076,28 +1092,23 @@ Section SimDefs.
   Import ThreadPool.
   Import MemoryObs.
   
-  Context {Sem : Modsem.t}.
-  Notation thread_pool := (t Sem).
-  Notation the_sem := (Modsem.sem Sem).
-  Notation perm_map := PermMap.t.
+  Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
+  
+  Notation thread_pool := (t cT).
+  Notation perm_map := access_map.
+  Notation invariant := (@invariant cT G the_sem).
   
   Variable aggelos : nat -> perm_map.
-  Variable the_ge : Genv.t (Modsem.F Sem) (Modsem.V Sem).
+  Variable the_ge : G.
 
-  Variable rename_code : (block -> block) -> Modsem.C Sem -> Modsem.C Sem.
-
-  Definition rename_core R c :=
-    match c with
-      | Krun c => Krun (rename_code R c)
-      | Kstage ext xs c => Kstage ext xs (rename_code R c)
-    end.
+  Variable rename_code : (block -> block) -> cT -> cT.
 
   Inductive tp_sim (tp tp' : thread_pool) (tid : nat) (R: block -> block) : Prop :=
   | Tp_sim : forall (pf: tid < num_threads tp)
                (pf': tid < num_threads tp')
                (Hnum: num_threads tp = num_threads tp')
                (Hcounter: counter tp = counter tp')
-               (Hpool: rename_core R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf')),
+               (Hpool: rename_code R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf')),
                (* (Hperm: (perm_maps tp) (Ordinal pf) = (perm_maps tp') (Ordinal pf')), *)
                tp_sim tp tp' tid R.
 
@@ -1107,51 +1118,56 @@ Section SimDefs.
                 (pf' : tid < num_threads tp') m_tid m'_tid m_tid_eq m'_tid_eq
                 (Hinv: invariant tp)
                 (Hinv': invariant tp')
-                (Hcompatible: mem_compatible tp m)
-                (Hcompatible': mem_compatible tp' m')
-                (Hrestrict: restrPermMap (permMapsInv_lt Hcompatible (Ordinal pf)) = m_tid)
-                (Hrestrict': restrPermMap (permMapsInv_lt Hcompatible' (Ordinal pf')) = m'_tid)
+                (Hcomp: mem_compatible tp m)
+                (Hcomp': mem_compatible tp' m')
+                (Hrestrict: restrPermMap
+                              (permMapsInv_lt (perm_comp Hcomp) (Ordinal pf)) = m_tid)
+                (Hrestrict': restrPermMap
+                               (permMapsInv_lt (perm_comp Hcomp') (Ordinal pf')) = m'_tid)
                 (Hmeq: m_tid =~ m_tid_eq)
                 (Hmeq': m'_tid =~ m'_tid_eq)
                 (Hobs: mem_obs_eq R m_tid_eq m'_tid_eq),
                 mem_sim tp tp' m m' tid R.
 End SimDefs.
 
-Arguments tp_sim {Sem} {rename_code} tp tp' tid R.
-Arguments mem_sim {Sem} tp tp' m m' tid R.
-Arguments rename_core {Sem} {rename_code} R c.
-
+Arguments tp_sim {cT} {rename_code} tp tp' tid R.
+Arguments mem_sim {cT G the_sem} tp tp' m m' tid R.
 End SimDefs.
 
-Module CoreLemmas.
-Section CoreLemmas.
+Module FineStepLemmas.
+Section FineStepLemmas.
 
   Import Concur ThreadPool MemoryObs SimDefs.
 
-  Context {Sem : Modsem.t}.
-  Notation thread_pool := (t Sem).
-  Notation the_sem := (Modsem.sem Sem).
-  Notation perm_map := PermMap.t.
+  Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
+  
+  Notation thread_pool := (t cT).
+  Notation perm_map := access_map.
+  Notation invariant := (@invariant cT G the_sem).
   
   Variable aggelos : nat -> perm_map.
-  Variable the_ge : Genv.t (Modsem.F Sem) (Modsem.V Sem).
-  Variable rename_code : (block -> block) -> Modsem.C Sem -> Modsem.C Sem.
-    
-  Hypothesis corestep_canonical :
+  Variable the_ge : G.
+  Variable rename_code : (block -> block) -> cT -> cT.
+  
+  Hypothesis corestep_canonical_max :
     forall c m c' m' n
-           (Hm_canon: isCanonical (getPermMap m))
-           (Hcore: corestepN the_sem the_ge n c m c' m'),
-      isCanonical (getPermMap m').
+      (Hm_canon: isCanonical (getMaxPerm m))
+      (Hcore: corestepN the_sem the_ge n c m c' m'),
+      isCanonical (getMaxPerm m').
 
-  Hypothesis corestep_permMap_wf :
-    forall tp tid (Htid: tid < @num_threads Sem tp) c m c' m' n
-           (Hperm: permMap_wf tp (getPermMap m) tid)
-           (Hcore: corestepN the_sem the_ge n c m c' m'),
-      permMap_wf tp (getPermMap m') tid.
+  Hypothesis corestep_canonical_cur :
+    forall c m c' m' n
+      (Hm_canon: isCanonical (getCurPerm m))
+      (Hcore: corestepN the_sem the_ge n c m c' m'),
+      isCanonical (getCurPerm m').
 
-  Notation tp_sim := (@tp_sim Sem rename_code).
-  Notation rename_core:= (@rename_core Sem rename_code).
-  Notation fstep := (@fstep Sem aggelos the_ge).
+  Hypothesis corestep_permMap_wf : forall tp tid (Htid: tid < @num_threads cT tp) c m c' m' n
+                                     (Hperm: permMap_wf tp (getCurPerm m) tid)
+                                     (Hcore: corestepN the_sem the_ge n c m c' m'),
+                                     permMap_wf tp (getCurPerm m') tid.
+
+  Notation tp_sim := (@tp_sim cT rename_code).
+  Notation fine_step := (@fine_step cT G the_sem the_ge).
 
   Hypothesis rename_code_at_ext :
     forall R c,
@@ -1168,31 +1184,31 @@ Section CoreLemmas.
                  subst H2
            end.
   
-  Lemma corestep_mem_nextblock :
-    forall c1 c2 m1i m1j m2i m2j m1 m2 p1i p1j p2j pnew
-           (Hupd: updPermMap m2i pnew = Some m2)
-           (Hlt1j: permMapLt p1j (getPermMap m1))
-           (Hlt1i: permMapLt p1i (getPermMap m1))
-           (Hlt2j: permMapLt p2j (getPermMap m2))
-           (Hrestr2j: restrPermMap Hlt2j = m2j)
-           (Hrestr1j: restrPermMap Hlt1j = m1j)
-           (Hrestr1i: restrPermMap Hlt1i = m1i)
-           (Hstep: corestep the_sem the_ge c1 m1i c2 m2i),
-      (Mem.nextblock m1j <= Mem.nextblock m2j)%positive.
-  Proof.
-    intros.
-    apply corestep_fwd in Hstep.
-    apply forward_nextblock in Hstep.
-    assert (H1i := restrPermMap_nextblock Hlt1i).
-    assert (H1j := restrPermMap_nextblock Hlt1j).
-    rewrite Hrestr1j in H1j.
-    rewrite Hrestr1i in H1i. rewrite H1j. rewrite <- H1i.
-    assert (H2j := restrPermMap_nextblock Hlt2j).
-    rewrite Hrestr2j in H2j.
-    rewrite H2j.
-    apply updPermMap_nextblock in Hupd. rewrite <- Hupd.
-    assumption.
-  Qed.
+  (* Lemma corestep_mem_nextblock : *)
+  (*   forall c1 c2 m1i m1j m2i m2j m1 m2 p1i p1j p2j pnew *)
+  (*          (Hupd: updPermMap m2i pnew = Some m2) *)
+  (*          (Hlt1j: permMapLt p1j (getPermMap m1)) *)
+  (*          (Hlt1i: permMapLt p1i (getPermMap m1)) *)
+  (*          (Hlt2j: permMapLt p2j (getPermMap m2)) *)
+  (*          (Hrestr2j: restrPermMap Hlt2j = m2j) *)
+  (*          (Hrestr1j: restrPermMap Hlt1j = m1j) *)
+  (*          (Hrestr1i: restrPermMap Hlt1i = m1i) *)
+  (*          (Hstep: corestep the_sem the_ge c1 m1i c2 m2i), *)
+  (*     (Mem.nextblock m1j <= Mem.nextblock m2j)%positive. *)
+  (* Proof. *)
+  (*   intros. *)
+  (*   apply corestep_fwd in Hstep. *)
+  (*   apply forward_nextblock in Hstep. *)
+  (*   assert (H1i := restrPermMap_nextblock Hlt1i). *)
+  (*   assert (H1j := restrPermMap_nextblock Hlt1j). *)
+  (*   rewrite Hrestr1j in H1j. *)
+  (*   rewrite Hrestr1i in H1i. rewrite H1j. rewrite <- H1i. *)
+  (*   assert (H2j := restrPermMap_nextblock Hlt2j). *)
+  (*   rewrite Hrestr2j in H2j. *)
+  (*   rewrite H2j. *)
+  (*   apply updPermMap_nextblock in Hupd. rewrite <- Hupd. *)
+  (*   assumption. *)
+  (* Qed. *)
 
   Hypothesis corestep_unchanged_on :
     forall c m c' m' b ofs
@@ -1202,16 +1218,16 @@ Section CoreLemmas.
       Maps.ZMap.get ofs (Maps.PMap.get b (Mem.mem_contents m')).
 
   Lemma corestep_disjoint_mem_obs_id :
-    forall c1 c2 m1i m1j m2i m2j m1 m2 p1i p1j pnew
-           (Hupd: updPermMap m2i pnew = Some m2)
-           (Hlt1j: permMapLt p1j (getPermMap m1))
-           (Hlt1i: permMapLt p1i (getPermMap m1))
-           (Hlt2j: permMapLt p1j (getPermMap m2))
-           (Hrestr2j: restrPermMap Hlt2j = m2j)
-           (Hrestr1j: restrPermMap Hlt1j = m1j)
-           (Hrestr1i: restrPermMap Hlt1i = m1i)
-           (Hdisjoint1: permMapsDisjoint p1i p1j)
-           (Hstep: corestep the_sem the_ge c1 m1i c2 m2i),
+    forall c1 c2 m1i m1j m2j m1 m2 p1i p1j
+      (Hcannical: isCanonical (getMaxPerm m1))
+      (Hlt1j: permMapLt p1j (getMaxPerm m1))
+      (Hlt1i: permMapLt p1i (getMaxPerm m1))
+      (Hlt2j: permMapLt p1j (getMaxPerm m2))
+      (Hrestr2j: restrPermMap Hlt2j = m2j)
+      (Hrestr1j: restrPermMap Hlt1j = m1j)
+      (Hrestr1i: restrPermMap Hlt1i = m1i)
+      (Hdisjoint1: permMapsDisjoint p1i p1j)
+      (Hstep: corestep the_sem the_ge c1 m1i c2 m2),
       mem_obs_eq (fun b => b) m1j m2j.
   Proof.
     intros.
@@ -1219,12 +1235,9 @@ Section CoreLemmas.
     { intros Hperm; unfold Mem.perm in *. simpl in *.
       simpl.
       apply corestep_unchanged_on with (b := b1) (ofs := ofs) in Hstep.
-      assert (Hm2_contents: Mem.mem_contents m2i = Mem.mem_contents m2)
-        by (eapply updPermMap_contents; eauto).
-      rewrite Hm2_contents in Hstep.
       rewrite <- Hrestr1i in Hstep. simpl in Hstep.
       rewrite <- Hrestr1j. rewrite <- Hrestr2j. simpl. assumption.
-      assert (Hdisjoint1': permMapsDisjoint (getPermMap m1i) (getPermMap m1j))
+      assert (Hdisjoint1': permMapsDisjoint (getCurPerm m1i) (getCurPerm m1j))
         by (eapply restrPermMap_disjoint_inv; eauto).
       intros Hpermi.
       eapply disjoint_norace; eauto.

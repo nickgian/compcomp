@@ -1,3 +1,337 @@
+Require Import Axioms.
+
+Require Import sepcomp. Import SepComp.
+Require Import semantics_lemmas.
+
+Require Import pos.
+Require Import stack. 
+Require Import cast.
+
+Require Import Program.
+Require Import ssreflect Ssreflect.seq ssrbool ssrnat ssrfun eqtype seq fintype finfun.
+Set Implicit Arguments.
+
+(*NOTE: because of redefinition of [val], these imports must appear 
+  after Ssreflect eqtype.*)
+Require Import AST.     (*for typ*)
+Require Import Values. (*for val*)
+Require Import Globalenvs. 
+Require Import Memory.
+Require Import Integers.
+
+Require Import ZArith.
+
+Notation EXIT := 
+  (EF_external 1%positive (mksignature (AST.Tint::nil) None)). 
+
+Notation CREATE_SIG := (mksignature (AST.Tint::AST.Tint::nil) (Some AST.Tint)).
+Notation CREATE := (EF_external 2%positive CREATE_SIG).
+
+Notation READ := 
+  (EF_external 3%positive 
+  (mksignature (AST.Tint::AST.Tint::AST.Tint::nil) (Some AST.Tint))).
+Notation WRITE := 
+  (EF_external 4%positive 
+  (mksignature (AST.Tint::AST.Tint::AST.Tint::nil) (Some AST.Tint))).
+
+Notation MKLOCK := 
+  (EF_external 5%positive (mksignature (AST.Tint::nil) (Some AST.Tint))).
+Notation FREE_LOCK := 
+  (EF_external 6%positive (mksignature (AST.Tint::nil) (Some AST.Tint))).
+
+Notation LOCK_SIG := (mksignature (AST.Tint::nil) (Some AST.Tint)).
+Notation LOCK := (EF_external 7%positive LOCK_SIG).
+Notation UNLOCK_SIG := (mksignature (AST.Tint::nil) (Some AST.Tint)).
+Notation UNLOCK := (EF_external 8%positive UNLOCK_SIG).
+
+Require Import compcert_linking compcert_threads threads_lemmas permissions.
+
+Module StepLemmas.
+  Section StepLemmas.
+
+    Import ThreadPool Concur.
+    Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
+
+    Notation thread_pool := (t cT).
+    Notation perm_map := access_map.
+    Notation invariant := (@invariant cT G the_sem).
+
+    Variable the_ge : G.
+    Notation fine_step := (@fine_step cT G the_sem the_ge).
+
+
+    Lemma restrPermMap_wf :
+      forall (tp : thread_pool) (m m': mem) tid
+        (Hcanonical: isCanonical (perm_maps tp tid))
+        (Hlt: permMapLt (perm_maps tp tid) (getMaxPerm m))
+        (Hcompatible: mem_compatible tp m)
+        (Hrestrict: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m')
+        (Hrace : race_free tp),
+        permMap_wf tp (getCurPerm m') (nat_of_ord tid).
+    Proof.
+      intros. subst.
+      unfold restrPermMap, getCurPerm. simpl.
+      unfold permMap_wf. intros tid' Htid' Hneq.
+      unfold permMapsDisjoint. simpl.
+      assert (Hneq' : tid' <> tid) by auto.
+      destruct tid as [tid Htid].
+      specialize (Hrace tid' tid Htid' Htid Hneq').
+      unfold permMapsDisjoint in Hrace.
+      destruct Hcompatible as [_ Hcan_mem].
+      unfold isCanonical in Hcan_mem.
+      unfold getMaxPerm in Hcan_mem. simpl in Hcan_mem.
+      intros b ofs. specialize (Hrace b ofs).
+      rewrite Maps.PMap.gmap. unfold getThreadPerm in *.
+      
+      unfold Maps.PMap.get in *. simpl.
+      unfold isCanonical in Hcanonical. rewrite Hcanonical in Hrace.
+      rewrite Maps.PTree.gmap. unfold Coqlib.option_map.
+      destruct (Maps.PTree.get b (Mem.mem_access m).2) eqn:?;
+      destruct (Maps.PTree.get b
+                               (perm_maps tp (Ordinal Htid)).2) eqn:?;
+      try rewrite Hcanonical; auto.
+      destruct (Maps.PTree.get b
+                               (perm_maps tp (Ordinal Htid')).2) eqn:?; auto.
+      unfold permMapLt in Hlt.
+      unfold Maps.PMap.get in Hlt.
+      specialize (Hlt b ofs).
+      rewrite Heqo0 in Hlt.
+      unfold getMaxPerm in Hlt. simpl in Hlt.
+      rewrite Maps.PTree.gmap1 in Hlt. unfold Coqlib.option_map in Hlt.
+      rewrite Heqo in Hlt.
+      apply equal_f with (x := ofs) in Hcan_mem.
+      rewrite Hcan_mem in Hlt.
+      unfold Mem.perm_order'' in Hlt. destruct (o ofs); auto.
+      exfalso. auto.
+      rewrite perm_union_comm. apply not_racy_union. constructor.
+    Defined.
+    
+    Lemma restrPermMap_can : forall (p : access_map) (m m': mem)
+                               (Hcanonical: isCanonical p)
+                               (Hlt: permMapLt p (getMaxPerm m))
+                               (Hrestrict: restrPermMap Hlt = m'),
+                               isCanonical (getCurPerm m').
+    Proof.
+      intros. subst.
+      unfold restrPermMap, getCurPerm, isCanonical in *. simpl in *.
+      auto.
+    Defined.
+
+    Lemma restrPermMap_can_max : forall (p : access_map) (m m': mem)
+                                   (Hcanonical: isCanonical (getMaxPerm m))
+                                   (Hlt: permMapLt p (getMaxPerm m))
+                                   (Hrestrict: restrPermMap Hlt = m'),
+                                   isCanonical (getMaxPerm m').
+    Proof.
+      intros. subst.
+      unfold restrPermMap, getMaxPerm, isCanonical in *. simpl in *.
+      auto.
+    Defined.
+
+    Lemma restrPermMap_correct :
+      forall p' m (Hlt: permMapLt p' (getMaxPerm m)) b ofs
+        (Hcan_p' : isCanonical p')
+        (Hcan_m : isCanonical (getMaxPerm m)),
+        Maps.PMap.get b (Mem.mem_access (restrPermMap Hlt)) ofs Max =
+        Maps.PMap.get b (getMaxPerm m) ofs /\
+        Maps.PMap.get b (Mem.mem_access (restrPermMap Hlt)) ofs Cur =
+        Maps.PMap.get b p' ofs.
+    Proof.
+      intros. unfold restrPermMap, getMaxPerm. simpl.
+      rewrite Maps.PMap.gmap. split;
+      unfold permMapLt in Hlt; specialize (Hlt b ofs);
+        unfold Maps.PMap.get; simpl; rewrite Maps.PTree.gmap; unfold Coqlib.option_map; simpl;
+        destruct (Maps.PTree.get b (Mem.mem_access m).2) eqn:?; auto.
+      unfold Maps.PMap.get in Hlt.
+      unfold isCanonical in *. 
+      destruct (Maps.PTree.get b p'.2) eqn:?; [| by rewrite Hcan_p'].
+      rewrite Hcan_m in Hlt.
+      unfold getMaxPerm in Hlt. rewrite Maps.PTree.gmap1 in Hlt. unfold Coqlib.option_map in Hlt.
+      rewrite Heqo in Hlt. simpl in Hlt.
+      destruct (o ofs); tauto.
+    Qed.
+        
+    Hypothesis corestep_canonical_max :
+      forall c m c' m' n
+        (Hm_canon: isCanonical (getMaxPerm m))
+        (Hcore: corestepN the_sem the_ge n c m c' m'),
+        isCanonical (getMaxPerm m').
+
+    Hypothesis corestep_canonical_cur :
+      forall c m c' m' n
+        (Hm_canon: isCanonical (getCurPerm m))
+        (Hcore: corestepN the_sem the_ge n c m c' m'),
+        isCanonical (getCurPerm m').
+
+    Hypothesis corestep_permMap_wf : forall tp tid (Htid: tid < @num_threads cT tp) c m c' m' n
+                                       (Hperm: permMap_wf tp (getCurPerm m) tid)
+                                       (Hcore: corestepN the_sem the_ge n c m c' m'),
+                                       permMap_wf tp (getCurPerm m') tid.
+
+    Lemma updThread_invariants :
+      forall (tp tp' : thread_pool) c m m1 c' m1' n tid counter
+        (Hinv: invariant tp)
+        (Hcompatible: mem_compatible tp m)
+        (Hthread: getThreadC tp tid = c)
+        (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
+        (Hcore: corestepN the_sem the_ge (S n) c m1 c' m1')
+        (Htp': tp' = updThread tp tid c' (getCurPerm m1') counter),
+        invariant tp'.
+    Proof.
+      intros. destruct Hinv as [Hcanonical Hrace Hlp].
+      destruct tid as [tid pf].
+      assert (Hcontra: tid <> 0).
+      { intros Hcontra. subst tp' tid.
+        simpl in *.
+        destruct (Hlp pf) as [c0' [Hthread' Hhalted]].
+        rewrite Hthread in Hthread'; subst.
+        destruct Hcore as [? [? [Hcontra _]]].
+        apply corestep_not_halted in Hcontra. rewrite Hthread' in Hcontra.
+        rewrite Hcontra in Hhalted. auto.
+      }
+      split.
+      { intros tid'.
+        destruct tid' as [tid' pf'].
+        destruct (tid == tid') eqn:Heq'; move/eqP:Heq'=>Heq'; subst tp'; try subst tid'.
+        - simpl in *.
+          pf_cleanup.
+          rewrite eq_refl.
+          eapply corestep_canonical_cur with (c := c) (n := S n) (c' := c'); eauto.
+          eapply restrPermMap_can; by eauto.
+        - simpl in *.
+          rewrite if_false.
+          eapply Hcanonical.
+          apply/eqP. intro Hcontra'. inversion Hcontra'; auto.
+      }
+      { unfold race_free in *.
+        intros.
+        destruct (tid == tid0) eqn:Heq0, (tid == tid0') eqn:Heq0'; move/eqP:Heq0=>Heq0;
+          move/eqP:Heq0'=>Heq0'; simpl in *.
+        - subst tid0 tid0'. exfalso; auto.
+        - subst tid0. subst tp'. simpl in *.
+          rewrite if_true.
+          rewrite if_false.
+          assert (Hwf := no_race_wf pf Hrace).
+          apply restrPermMap_wf in Hrestrict_pmap; auto.
+          assert (Hwf': permMap_wf tp (getCurPerm m1') tid).
+          { eapply corestep_permMap_wf with (n := S n); eauto. }
+          unfold permMap_wf in Hwf'.
+          specialize (Hwf' _ Htid0' Heq0').
+          apply permMapsDisjoint_comm. assumption.
+          apply permMapsInv_lt. destruct Hcompatible; auto.
+          apply/eqP. intro Hcontra'; inversion Hcontra'. auto.
+          rewrite (leq_pf_irr _ _ Htid0 pf). apply eq_refl.
+        - subst tid0' tp'; simpl in *.
+          rewrite if_false. rewrite if_true.
+          assert (Hwf := no_race_wf pf Hrace).
+          apply restrPermMap_wf in Hrestrict_pmap; auto.
+          assert (Hwf': permMap_wf tp (getCurPerm m1') tid).
+          { eapply corestep_permMap_wf with (n := S n); eauto. }
+          unfold permMap_wf in Hwf'.
+          specialize (Hwf' _ Htid0 Heq0).
+          assumption.
+          apply permMapsInv_lt. destruct Hcompatible; auto.
+          rewrite (leq_pf_irr _ _ Htid0' pf). apply eq_refl.
+          apply/eqP. intro Hcontra'. inversion Hcontra'. auto.
+        - subst tp'. simpl.
+          rewrite if_false. rewrite if_false; simpl in *.
+          eapply Hrace; eauto.
+          apply/eqP. intro Hcontra'. inversion Hcontra'. auto.
+          apply/eqP. intro Hcontra'. inversion Hcontra'. auto.
+      }
+      { subst tp'. simpl. intros pf0. destruct (Hlp pf0) as [c0 [Hcode Hhalted]].
+        exists c0. split; auto.
+        rewrite if_false; auto.
+        apply/eqP. intro Hcontra'. inversion Hcontra'; auto.
+      }     
+    Qed.
+
+    Lemma fine_step_invariants :
+      forall (tp tp' : thread_pool) m m' sched sched'
+        (Hstep: fine_step sched tp m sched' tp' m'),
+        invariant tp'.
+    Proof.
+      intros. inversion Hstep.
+      eapply updThread_invariants; eauto.
+    Qed.
+
+    Hypothesis corestep_access :
+      forall c m c' m' b ofs
+        (Hcore: corestep the_sem the_ge c m c' m'),
+        (forall k, Mem.perm_order'' (Maps.PMap.get b (Mem.mem_access m') ofs k)
+                               (Maps.PMap.get b (Mem.mem_access m) ofs k))
+        \/ (forall k, (Maps.PMap.get b (Mem.mem_access m) ofs k = Some Freeable /\
+                 Maps.PMap.get b (Mem.mem_access m') ofs k = None)).
+    
+    Lemma fine_step_compatible :
+      forall (tp tp' : thread_pool) m m' sched sched'
+        (Hstep: fine_step sched tp m sched' tp' m'),
+        mem_compatible tp' m'.
+    Proof.
+          intros; inversion Hstep; subst; clear Hstep.
+      assert (Hcorestep := HcorestepN).
+      unfold corestepN in Hcorestep.
+      destruct Hcorestep as [c2' [m2' [Hcore Heq]]].
+      inversion Heq; subst c2' m2'.
+      split.
+      { unfold perm_compatible, updThread. simpl.
+        intros.
+        match goal with
+          | [ |- context[if ?Expr then _ else _]] =>
+            destruct Expr eqn:Htid
+        end.
+          by apply getCur_Max.
+          move/eqP:Htid=>Htid.
+        assert (Hlt := (perm_comp Hcompatible) tid b ofs). unfold getThreadPerm in Hlt.
+        destruct (corestep_access _ _ c' m' b ofs Hcore) as [Hperm | Hperm].
+        - specialize (Hperm Max).
+          assert (Hlt_max: Mem.perm_order'' (Maps.PMap.get b (getMaxPerm m') ofs)
+                                            (Maps.PMap.get b (getMaxPerm m) ofs)).
+          { do 2 rewrite getMaxPerm_correct.
+            simpl in Hperm.
+            unfold Maps.PMap.get in *. simpl in Hperm.
+            rewrite Maps.PTree.gmap in Hperm.
+            unfold Coqlib.option_map in Hperm.
+            destruct (Maps.PTree.get b (Mem.mem_access m).2) eqn:?; auto.
+          }
+          eapply po_trans; eauto.
+        - replace (Maps.PMap.get b (getMaxPerm m') ofs) with (None : option permission)
+            by (destruct (Hperm Max) as [_ HmaxNone];
+                  by rewrite getMaxPerm_correct).
+          destruct (Hperm Cur) as [HCurF HcurNone].
+          clear Hperm.
+          assert (Hracy: Maps.PMap.get b (perm_maps tp (Ordinal Htid0_lt_pf)) ofs = Some Freeable).
+          { clear Hcore Hlt HcurNone.
+            unfold Maps.PMap.get in *.
+            simpl in *.
+            rewrite Maps.PTree.gmap in HCurF.
+            unfold Coqlib.option_map in HCurF.
+            destruct (Maps.PTree.get b (Mem.mem_access m).2) eqn:?.
+            - unfold getThreadPerm in HCurF.
+              unfold Maps.PMap.get in HCurF. auto.
+            - discriminate.
+          }
+          assert (Hno_race := no_race Hinv).
+          destruct tid as [tid pf_tid].
+          assert (Hneq: tid <> tid0)
+            by (intro Hcontra; subst; pf_cleanup; auto).
+          specialize (Hno_race tid tid0 pf_tid Htid0_lt_pf Hneq).
+          unfold permMapsDisjoint in Hno_race.
+          specialize (Hno_race b ofs).
+          rewrite perm_union_comm in Hno_race.
+          apply no_race_racy in Hno_race; auto.
+          inversion Hno_race. constructor.
+          rewrite Hracy. constructor.
+      }
+      { eapply corestep_canonical_max; eauto.
+        unfold isCanonical, getMaxPerm, restrPermMap. simpl.
+        apply (mem_canonical Hcompatible).
+      }
+    Qed.
+
+  End StepLemmas.
+End StepLemmas.
+        
 Module MemoryObs.
   
   Definition mem_func_eq (m m' : Mem.mem) :=
@@ -28,14 +362,16 @@ Module MemoryObs.
 
   Hint Resolve meq_Reflexive : mem.
         
-  Definition mem_obs_eq (f : block -> block) (m1 m2 : Mem.mem) : Prop :=
-    forall b1 b2 ofs (Hrenaming: f b1 = b2),
-      (Mem.perm m1 b1 ofs Cur Readable ->
-       Maps.ZMap.get ofs (Maps.PMap.get b1 (Mem.mem_contents m1)) =
-       Maps.ZMap.get ofs (Maps.PMap.get b2 (Mem.mem_contents m2))) /\
-      (forall k,
-         Maps.PMap.get b1 (Mem.mem_access m1) ofs k =
-         Maps.PMap.get b2 (Mem.mem_access m2) ofs k).
+  Record mem_obs_eq (f : block -> block) (m1 m2 : Mem.mem) :=
+    { val_obs_eq :
+        forall b1 b2 ofs (Hrenaming: f b1 = b2)
+          (Hperm: Mem.perm m1 b1 ofs Cur Readable),
+          Maps.ZMap.get ofs (Maps.PMap.get b1 (Mem.mem_contents m1)) =
+          Maps.ZMap.get ofs (Maps.PMap.get b2 (Mem.mem_contents m2));
+      cur_obs_eq :
+        forall b1 b2 ofs (Hrenaming: f b1 = b2),
+          Maps.PMap.get b1 (Mem.mem_access m1) ofs Cur =
+          Maps.PMap.get b2 (Mem.mem_access m2) ofs Cur}.
 
   Lemma mem_obs_trans_comm :
     forall m1j m1'j m2j R
@@ -43,22 +379,24 @@ Module MemoryObs.
            (Hmem_2: mem_obs_eq (fun b => b) m1j m2j),
       mem_obs_eq R m2j m1'j.
   Proof.
-    intros.
+    intros. destruct Hmem_1 as [val_obs_eq1 cur_obs_eq1],
+                               Hmem_2 as [val_obs_eq2 cur_obs_eq2].
     split.
-    { intro Hperm.
-      destruct (Hmem_1 b1 b2 ofs) as [Hval1 Hperm1]; auto.
-      destruct (Hmem_2 b1 b1 ofs) as [Hval2 Hperm2]; auto.
-      specialize (Hperm2 Cur). subst.
+    { intros. 
+      specialize (val_obs_eq1 b1 b2 ofs Hrenaming); auto.
+      specialize (val_obs_eq2 b1 b1 ofs (Logic.eq_refl _)); auto.
+      specialize (cur_obs_eq2 b1 b1 ofs (Logic.eq_refl _)).     
       assert (H: Mem.perm m1j b1 ofs Cur Readable).
-      { unfold Mem.perm in *. rewrite Hperm2.
+      { unfold Mem.perm in *. rewrite cur_obs_eq2.
         assumption.
       }
-      rewrite <- Hval2; auto.
+      rewrite <- val_obs_eq2, <- val_obs_eq1; auto.
     }
-    { destruct (Hmem_1 b1 b2 ofs) as [Hval1 Hperm1]; auto.
-      destruct (Hmem_2 b1 b1 ofs) as [Hval2 Hperm2]; auto.
-      subst. intro k.
-      rewrite <- Hperm1. auto.
+    { intros.
+      specialize (cur_obs_eq1 b1 b2 ofs Hrenaming).
+      specialize (cur_obs_eq2 b1 b1 ofs (Logic.eq_refl _)).
+      subst.
+      rewrite <- cur_obs_eq2, <- cur_obs_eq1. reflexivity.
     }
   Qed.
 
@@ -71,18 +409,24 @@ Module MemoryObs.
       mem_obs_eq R m1j m2'j.
   Proof.
     intros.
-    unfold mem_obs_eq. intros.
-    destruct (Hmem_1 b1 b2 ofs Hrenaming) as [Hval1 Hperm1].
-    unfold mem_obs_eq in Hmem_2.
-    destruct (Hmem_2 b2 b2 ofs (Logic.eq_refl b2)) as [Hval2 Hperm2].
+    destruct Hmem_1 as [val_obs_eq1 cur_obs_eq1],
+                       Hmem_2 as [val_obs_eq2 cur_obs_eq2].
     split.
-    - intro Hperm.
-      erewrite Hval1. eapply Hval2.
-      unfold Mem.perm in *.
-      erewrite <- Hperm1. eauto.
-      assumption.
-      intro k.
-      erewrite Hperm1. eauto.
+    { intros.
+      specialize (val_obs_eq1 b1 b2 ofs Hrenaming);
+        specialize (cur_obs_eq1 b1 b2 ofs Hrenaming).
+      specialize (val_obs_eq2 b2 b2 ofs (Logic.eq_refl b2));
+        specialize (cur_obs_eq2 b2 b2 ofs (Logic.eq_refl b2)).
+      assert (Mem.perm m1'j b2 ofs Cur Readable).
+      { unfold Mem.perm in *. rewrite cur_obs_eq1 in Hperm.
+        auto. }
+      rewrite val_obs_eq1; auto.
+    }
+    { intros.
+      specialize (cur_obs_eq1 b1 b2 ofs Hrenaming).
+      specialize (cur_obs_eq2 b2 b2 ofs (Logic.eq_refl b2)).
+        by rewrite <- cur_obs_eq2.
+    }
   Qed.
 
   Hint Resolve mem_obs_trans : mem.
@@ -94,13 +438,15 @@ Module MemoryObs.
            (Hobs_eq: mem_obs_eq R m1_eq m1'_eq),
       mem_obs_eq R m1 m1'.
   Proof.
-    intros. inversion Hmeq; inversion Hmeq'.
-    unfold Mem.perm, mem_func_eq in *;
-      destruct Hmeq as [? [? ?]], Hmeq' as [? [? ?]];
-      destruct m1, m1', m1_eq, m1'_eq; simpl in *; subst;
-      econstructor; auto;
-      destruct (Hobs_eq b1 b2 ofs Hrenaming) as [Hcontents Hperm];
-      assumption.
+    intros.
+    admit.
+    (* inversion Hmeq; inversion Hmeq'. *)
+    (* unfold Mem.perm, mem_func_eq in *; *)
+    (*   destruct Hmeq as [? [? ?]], Hmeq' as [? [? ?]]; *)
+    (*   destruct m1, m1', m1_eq, m1'_eq; simpl in *; subst; *)
+    (*   econstructor; auto; *)
+    (*   destruct (Hobs_eq b1 b2 ofs Hrenaming) as [Hcontents Hperm]; *)
+    (*   assumption. *)
   Qed.
 
   Hint Resolve mem_func_obs_eq : mem.
@@ -130,7 +476,9 @@ Section SimDefs.
                (pf': tid < num_threads tp')
                (Hnum: num_threads tp = num_threads tp')
                (Hcounter: counter tp = counter tp')
-               (Hpool: rename_code R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf')),
+               (Hpool: rename_code R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf'))
+               (Hinv: invariant tp)
+               (Hinv': invariant tp'),
                (* (Hperm: (perm_maps tp) (Ordinal pf) = (perm_maps tp') (Ordinal pf')), *)
                tp_sim tp tp' tid R.
 
@@ -138,8 +486,6 @@ Section SimDefs.
             (R : block -> block) : Prop :=
   | Mem_sim : forall (pf : tid < num_threads tp)
                 (pf' : tid < num_threads tp') m_tid m'_tid m_tid_eq m'_tid_eq
-                (Hinv: invariant tp)
-                (Hinv': invariant tp')
                 (Hcomp: mem_compatible tp m)
                 (Hcomp': mem_compatible tp' m')
                 (Hrestrict: restrPermMap
@@ -152,14 +498,14 @@ Section SimDefs.
                 mem_sim tp tp' m m' tid R.
 End SimDefs.
 
-Arguments tp_sim {cT} {rename_code} tp tp' tid R.
-Arguments mem_sim {cT G the_sem} tp tp' m m' tid R.
+Arguments tp_sim {cT G the_sem} {rename_code} tp tp' tid R.
+Arguments mem_sim {cT} tp tp' m m' tid R.
 End SimDefs.
 
 Module FineStepLemmas.
 Section FineStepLemmas.
 
-  Import Concur ThreadPool MemoryObs SimDefs.
+  Import Concur ThreadPool MemoryObs SimDefs StepLemmas.
 
   Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
   
@@ -188,7 +534,15 @@ Section FineStepLemmas.
                                      (Hcore: corestepN the_sem the_ge n c m c' m'),
                                      permMap_wf tp (getCurPerm m') tid.
 
-  Notation tp_sim := (@tp_sim cT rename_code).
+  Hypothesis corestep_access :
+    forall c m c' m' b ofs
+      (Hcore: corestep the_sem the_ge c m c' m'),
+      (forall k, Mem.perm_order'' (Maps.PMap.get b (Mem.mem_access m') ofs k)
+                             (Maps.PMap.get b (Mem.mem_access m) ofs k))
+      \/ (forall k, (Maps.PMap.get b (Mem.mem_access m) ofs k = Some Freeable /\
+               Maps.PMap.get b (Mem.mem_access m') ofs k = None)).
+
+  Notation tp_sim := (@tp_sim cT G the_sem rename_code).
   Notation fine_step := (@fine_step cT G the_sem the_ge).
 
   Hypothesis rename_code_at_ext :
@@ -241,7 +595,7 @@ Section FineStepLemmas.
 
   Lemma corestep_disjoint_mem_obs_id :
     forall c1 c2 m1i m1j m2j m1 m2 p1i p1j
-      (Hcannical: isCanonical (getMaxPerm m1))
+      (Hcanonical: isCanonical (getMaxPerm m1))
       (Hlt1j: permMapLt p1j (getMaxPerm m1))
       (Hlt1i: permMapLt p1i (getMaxPerm m1))
       (Hlt2j: permMapLt p1j (getMaxPerm m2))
@@ -253,8 +607,8 @@ Section FineStepLemmas.
       mem_obs_eq (fun b => b) m1j m2j.
   Proof.
     intros.
-    split; simpl in Hrenaming; subst b2.
-    { intros Hperm; unfold Mem.perm in *. simpl in *.
+    split; intros; simpl in Hrenaming; subst b2.
+    { unfold Mem.perm in *. simpl in *.
       simpl.
       apply corestep_unchanged_on with (b := b1) (ofs := ofs) in Hstep.
       rewrite <- Hrestr1i in Hstep. simpl in Hstep.
@@ -264,25 +618,48 @@ Section FineStepLemmas.
       intros Hpermi.
       eapply disjoint_norace; eauto.
     }
-    { rewrite <- Hrestr1j. rewrite <- Hrestr2j. simpl. reflexivity. }
+    { rewrite <- Hrestr1j. rewrite <- Hrestr2j.
+      simpl.
+      assert (corestepN the_sem the_ge 1 c1 m1i c2 m2)
+        by (unfold corestepN; do 2 eexists; eauto);
+      assert (Hcanonical1i: isCanonical (getMaxPerm m1i))
+        by (eapply restrPermMap_can_max; eauto);
+      assert (Hcanonical2: isCanonical (getMaxPerm m2))
+        by (eapply corestep_canonical_max; eauto).
+      clear -Hcanonical2 Hcanonical Hlt1j Hlt2j Hdisjoint1.
+      unfold permMapLt in *. specialize (Hlt1j b1 ofs).
+      specialize (Hlt2j b1 ofs).
+      unfold getMaxPerm, isCanonical in Hcanonical, Hcanonical2;
+      simpl in *.
+      unfold Maps.PMap.get in *. simpl in *.
+      do 2 rewrite Maps.PTree.gmap. rewrite Maps.PTree.gmap1 in Hlt1j;
+      rewrite Maps.PTree.gmap1 in Hlt2j.
+      unfold Coqlib.option_map in *.
+      destruct (Maps.PTree.get b1 (Mem.mem_access m1).2) eqn:Hget1;
+        destruct (Maps.PTree.get b1 (Mem.mem_access m2).2) eqn:Hget2; auto;
+      [replace ((Mem.mem_access m2).1 ofs Max) with (None : option permission) in Hlt2j
+        by (apply equal_f with (x:= ofs) in Hcanonical2; auto);
+        unfold Mem.perm_order'' in Hlt2j |
+       replace ((Mem.mem_access m1).1 ofs Max) with (None : option permission) in Hlt1j
+         by (apply equal_f with (x:= ofs) in Hcanonical; auto);
+         unfold Mem.perm_order'' in Hlt1j];
+      destruct (Maps.PTree.get b1 p1j.2);
+        match goal with
+            [H: match ?Expr with _ => _ end |- _] =>
+            destruct Expr
+        end; tauto.     
+    }
   Qed.
 
   Ltac step_absurd :=
     repeat
       (match goal with
-         | [H1: List.hd_error ?Sched = Some ?Tid,
-                H2: ?Sched = _ |- _] =>
-           rewrite H2 in H1; simpl in H1; inversion H1;
-         try (subst Tid; clear H1)
-         | [H1: List.hd_error ?Sched = Some ?Tid1,
-                H2: List.hd_error ?Sched = Some ?Tid2 |- _] =>
-           rewrite H2 in H1; simpl in H1; inversion H1; subst Tid1; clear H1
          | [H1: getThreadC ?Tp (@Ordinal _ ?Tid ?Pf1) = _,
                 H2: getThreadC ?Tp (@Ordinal _ ?Tid ?Pf2) = _ |- _] =>
            assert (Pf1 = Pf2) by (erewrite leq_pf_irr; reflexivity);
          subst Pf2
          | [H1: getThreadC ?Tp (Ordinal ?Pf) = _,
-                H2: getThreadC ?Tp (Ordinal ?Pf) = Krun ?C2 |- _] =>   
+                H2: getThreadC ?Tp (Ordinal ?Pf) = ?C2 |- _] =>   
            rewrite H2 in H1; inversion H1; try (subst C2; clear H1)
           | [H1: semantics.at_external _ ?C1 = None,
                  H2: semantics.at_external _ ?C1 = Some _ |- _] =>
@@ -293,49 +670,46 @@ Section FineStepLemmas.
          exfalso; ssromega
        end).
 
-  Lemma corestep_sim_invariant_l :
-    forall sched (tp1 tp1' tp2 : thread_pool) c (m1 m2 m1' : mem) (i j : nat)
-           (R: block -> block)
-           (Hneq: i <> j) (pfi : i < num_threads tp1)
-           (Htp_sim: tp_sim tp1 tp1' j R)
-           (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
-           (Hget: getThreadC tp1 (Ordinal pfi) = Krun c)
-           (Hat_external: semantics.at_external the_sem c = None)
-           (Hstep: fstep (i :: sched) tp1 m1 sched tp2 m2)
-           (Hcompatible2: mem_compatible tp2 m2),
+  Lemma fine_step_sim_invariant_l :
+    forall sched (tp1 tp1' tp2 : thread_pool) (m1 m2 m1' : mem) (i j : nat)
+      (R: block -> block) (Hneq: i <> j)
+      (Htp_sim: tp_sim tp1 tp1' j R)
+      (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
+      (Hstep: fine_step (i :: sched) tp1 m1 sched tp2 m2)
+      (Hcompatible2: mem_compatible tp2 m2),
       tp_sim tp2 tp1' j R /\ mem_sim tp2 tp1' m2 m1' j R.
   Proof with (eauto 3 with mem).
-    intros. inversion Hstep as [tsched tpt1 tpt2 mt1 m1i ct m2i m' c'| | | | | | | | ];
-      [subst tpt1 tpt2 tsched mt1 m' | subst | subst | subst | subst | subst | subst | subst | subst];
-      try step_absurd.
-    { destruct Hcorestep as [c0 [m0 [Hcorestep Heq]]].
-      inversion Heq; subst c0 m0; simpl in *.
-      split.
-      { subst. inversion Htp_sim.
-        econstructor.
-      - inversion Hnum. reflexivity.
-      - inversion Hcounter. reflexivity.
-      - simpl. rewrite if_false. eassumption.
+    intros. inversion Hstep as [tsched tp tp' m m1i c m' c' tid0 pf0].
+    subst tid0 tsched tp' m' m tp.
+    split.
+    { (* Proof of tp_sim *)
+      inversion Htp_sim.
+      assert (pf2: j < num_threads tp2)
+             by (subst; simpl; auto).
+      eapply @Tp_sim with (pf := pf2) (pf' := pf'); simpl; eauto.
+      - subst; auto.
+      - subst; auto.
+      - subst; simpl. rewrite if_false. simpl in pf2. pf_cleanup. eassumption.
         apply/eqP. intros Hcontra; inversion Hcontra; auto.
-      }
-      { inversion Hmem_sim as [pf1 pf1' m1j m1'j m1j_eq m1'j_eq].
+      - eapply @updThread_invariants with
+        (c := c) (m1 := m1i) (c' := c') (m1' := m2) (tp := tp1); eauto.
+    }
+    { (* Proof of mem_sim *)
+      inversion Hmem_sim as [pf1 pf1' m1j m1'j m1j_eq m1'j_eq].
         assert (pf2: j < num_threads tp2)
           by (subst; simpl; auto).
-        assert (Hperm2: pnew = getPermMap m2)
-          by (symmetry; eapply updPermMap_get; eauto).
-        remember (restrPermMap (permMapsInv_lt Hcompatible2 (Ordinal pf2)))
+        remember (restrPermMap (permMapsInv_lt (perm_comp Hcompatible2) (Ordinal pf2)))
           as m2j eqn:Hrestr2_j;
           symmetry in Hrestr2_j.
         eapply Mem_sim with (m_tid_eq := m2j) (m'_tid_eq := m1'j)...
         pf_cleanup.
-        assert (HcorestepN: corestepN (Modsem.sem Sem) the_ge (S 0) c m1i c' m2i)
-          by (unfold corestepN; eauto).
-        eapply (updThread_invariants corestep_canonical corestep_permMap_wf Hinv0 Hrestrict_pmap Hthread HcorestepN Htp').
         assert (Hobs': mem_obs_eq id m1j m2j).
-        { eapply corestep_disjoint_mem_obs_id
-          with (m1j := m1j) (m2j := m2j) (m1i := m1i) (m2i := m2i)
+        { simpl in HcorestepN. destruct HcorestepN as [c2t [m2t [? Heq]]].
+          inversion Heq. subst c2t m2t. 
+          eapply corestep_disjoint_mem_obs_id
+          with (m1j := m1j) (m2j := m2j) (m1i := m1i) (m2 := m2)
                             (p1j := perm_maps tp1 (Ordinal pf1)).
-          - eassumption.
+          - eapply (mem_canonical Hcompatible).
           - simpl in Hrestr2_j. rewrite <- Hrestr2_j. eapply restrPermMap_irr.
             subst tp2. simpl.
             rewrite if_false. pf_cleanup. reflexivity.
@@ -347,7 +721,6 @@ Section FineStepLemmas.
           - eassumption.
         } 
         assert (mem_obs_eq R m1j m1'j)...
-      }
     }
     Grab Existential Variables.
     clear -Htp' pf2 pf1 Hneq Hcompatible2.
@@ -356,70 +729,63 @@ Section FineStepLemmas.
     { subst tp2; simpl. rewrite if_false. do 2 eapply f_equal. by erewrite leq_pf_irr.
       apply/eqP. intro Hcontra. inversion Hcontra; auto. }
     rewrite Hperm_j.
-    eapply permMapsInv_lt; subst; auto. 
+    eapply permMapsInv_lt; subst. by apply perm_comp in Hcompatible2.
   Qed.
 
-  Lemma corestep_sim_invariant_r :
-    forall fsched (tp1 tp1' tp2' : thread_pool) c (m1 m1' m2' : mem) (i j : nat)
-           (R: block -> block)
-           (Hneq: i <> j) (pfi' : i < num_threads tp1')
-           (Htp_sim: tp_sim tp1 tp1' j R)
-           (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
-           (Hget: getThreadC tp1' (Ordinal pfi') = Krun c)
-           (Hat_external: semantics.at_external the_sem c = None)
-           (Hstep: fstep (i :: fsched) tp1' m1' fsched tp2' m2')
-           (Hcompatible2: mem_compatible tp2' m2'),
+  Lemma fine_step_sim_invariant_r :
+    forall sched (tp1 tp1' tp2' : thread_pool) (m1 m1' m2' : mem) (i j : nat)
+      (R: block -> block) (Hneq: i <> j)
+      (Htp_sim: tp_sim tp1 tp1' j R)
+      (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
+      (Hstep: fine_step (i :: sched) tp1' m1' sched tp2' m2')
+      (Hcompatible2: mem_compatible tp2' m2'),
       tp_sim tp1 tp2' j R /\ mem_sim tp1 tp2' m1 m2' j R.
   Proof with (eauto 3 with mem).
-    intros;
-    inversion Hstep as [tsched' tpt1' tpt2' mt1' m1i' ct' m2i' m'' c2'| | | | | | | | ];
-      [subst tid0 tsched' tpt1' tpt2' mt1' m'' | subst | subst | subst | subst | subst | subst | subst | subst];
-      try step_absurd.
-    { clear Hstep.
-      destruct Hcorestep as [? [? [Hcorestep Heq]]].
-      inversion Heq; subst x x0; simpl in *.
-      split.
-      { inversion Htp_sim. rewrite Htp'.
-        econstructor.
-        - simpl; assumption.
-        - simpl; assumption.
-        - simpl. rewrite if_false. eassumption.
-          apply/eqP. intros Hcontra; inversion Hcontra; auto.
+    intros. inversion Hstep as [tsched' tp tp' m m1i' c m' c' tid0 pf0].
+    subst tid0 tsched' tp' m' m tp.
+    split.
+    { (* Proof of tp_sim *)
+      inversion Htp_sim.
+      assert (pf2': j < num_threads tp2')
+        by (subst; simpl; auto).
+      eapply @Tp_sim with (pf := pf) (pf' := pf2'); simpl; eauto.
+      - subst; auto.
+      - subst; auto.
+      - subst; simpl. rewrite if_false. simpl in pf2'. pf_cleanup. eassumption.
+        apply/eqP. intros Hcontra; inversion Hcontra; auto.
+      - eapply @updThread_invariants with (tp := tp1'); eauto.
+    }
+    { (* Proof of mem_sim *)
+      inversion Hmem_sim as [pf1 pf1' m1j m1'j].
+      assert (pf2': j < num_threads tp2')
+        by (subst; simpl; auto).
+      remember (restrPermMap (permMapsInv_lt (perm_comp Hcompatible2) (Ordinal pf2')))
+        as m2'j eqn:Hrestr2_j;
+        symmetry in Hrestr2_j.
+      pf_cleanup.
+      destruct HcorestepN as [m2'' [c2'' [? Heq]]].
+      inversion Heq; subst m2'' c2''.
+      eapply @Mem_sim with (m'_tid_eq := m2'j) (m_tid_eq := m1j)...
+      assert (Hobs_12j: mem_obs_eq id m1'j m2'j).
+      {
+        subst tp2'. simpl in Hrestr2_j.
+        pf_irr_clean.
+        eapply corestep_disjoint_mem_obs_id
+        with (m1 := m1') (m1i := m1i') (m2j := m2'j) (m2 := m2') 
+                           (p1j := perm_maps tp1' (Ordinal pf1')).        
+        - apply (mem_canonical Hcompatible).
+        - rewrite <- Hrestr2_j. eapply restrPermMap_irr; eauto.
+          rewrite if_false. unfold getThreadPerm.
+          do 2 apply f_equal. erewrite leq_pf_irr; eauto.
+          apply/eqP; intro Hcontra; inversion Hcontra; auto.
+        - rewrite <- Hrestrict'.
+          eapply restrPermMap_irr.
+          apply f_equal. reflexivity.
+        - eapply Hrestrict_pmap.
+        - destruct Hinv. auto.
+        - eassumption.
       }
-      { inversion Hmem_sim as [pf1 pf1' m1j m1'j].
-        assert (pf2': j < num_threads tp2')
-          by (subst; simpl; auto).
-        assert (Hperm2': pnew = getPermMap m2')
-          by (symmetry; eapply updPermMap_get; eauto).
-        remember (restrPermMap (permMapsInv_lt Hcompatible2 (Ordinal pf2')))
-          as m2'j eqn:Hrestr2_j;
-          symmetry in Hrestr2_j.
-        pf_cleanup.
-        assert (HcorestepN: corestepN (Modsem.sem Sem) the_ge (S 0) c m1i' c2' m2i')
-          by (unfold corestepN; eauto).
-        eapply @Mem_sim with (m'_tid_eq := m2'j) (m_tid_eq := m1j)...
-        eapply (updThread_invariants corestep_canonical corestep_permMap_wf Hinv' Hrestrict_pmap Hthread HcorestepN Htp').
-        assert (Hobs_12j: mem_obs_eq id m1'j m2'j).
-        {
-          subst tp2'. simpl in Hrestr2_j.
-          pf_irr_clean.
-          eapply corestep_disjoint_mem_obs_id
-          with (m1i := m1i') (m2i := m2i') (m2 := m2') 
-                             (p1j := perm_maps tp1' (Ordinal pf1')).
-          - eassumption.
-          - rewrite <- Hrestr2_j. eapply restrPermMap_irr; eauto.
-           rewrite if_false. unfold getThreadPerm.
-           do 2 apply f_equal. erewrite leq_pf_irr; eauto.
-           apply/eqP; intro Hcontra; inversion Hcontra; auto.
-         - rewrite <- Hrestrict'.
-           eapply restrPermMap_irr.
-           apply f_equal. reflexivity.
-         - eapply Hrestrict_pmap.
-         - destruct Hinv. auto.
-         - eassumption.
-        }
-        eapply mem_obs_trans...
-      }
+      eapply mem_obs_trans...
     } 
     Grab Existential Variables.
     clear -pf2' pf1' Hneq Hcompatible2.
@@ -428,79 +794,9 @@ Section FineStepLemmas.
     { simpl in *. rewrite if_false. do 2 eapply f_equal. by erewrite leq_pf_irr.
       apply/eqP. intro Hcontra. inversion Hcontra; auto. }
     rewrite Hperm_j.
-    eapply permMapsInv_lt; subst; auto.
-    eapply permMapsInv_lt; eauto.
+    eapply permMapsInv_lt; subst; apply (perm_comp Hcompatible2).
+    eapply permMapsInv_lt; apply (perm_comp Hcompatible).
   Qed.
-
-(* Lemma corestep_updPermMap : *)
-(*       forall tp tp' m m1 c m1' (c' : Modsem.C Sem) pnew tid0 (Htid0_lt_pf  : tid0 < num_threads tp), *)
-(*         let: n := counter tp in *)
-(*         let: tid := Ordinal Htid0_lt_pf in *)
-(*         forall *)
-(*           (Hinv: invariant tp) *)
-(*           (Hcompatible2: mem_compatible tp m), *)
-(*           (Hthread: getThreadC tp tid = Krun c) *)
-(*             (Hrestrict_pmap: restrPermMap *)
-(*                                (permMapsInv_lt Hcompatible *)
-(*                                                (Ordinal tid) = m1)  *)
-(*           (Hcorestep: corestepN the_sem the_ge (S 0) c m1 c' m1') *)
-(*           (Htp': tp' = updThread tp tid (Krun c') (getPermMap m1') n) *)
-(*           (Hupd_mem: updPermMap m1' pnew = None), *)
-(*               False. *)
-(*     Proof. *)
-(*       intros. *)
-(*       unfold updPermMap in Hupd_mem. *)
-(*       destruct (Pos.eq_dec (Mem.nextblock m1') (PermMap.next (sval pnew))). *)
-(*       discriminate. *)
-(*       clear Hupd_mem. *)
-(*       assert (Hunion_inv := svalP (permMapsUnion (canonical Hinv) (no_race Hinv))). *)
-(*       simpl in Hunion_inv. unfold permMapsInv in Hunion_inv. *)
-(*       destruct Hunion_inv as [_ [Hgt [_ [_ [Hnext _]]]]]. *)
-(*       destruct Hnext as [tid_max Hnext]. *)
-(*       assert (Hnext_eq: Mem.nextblock m1 = *)
-(*                         PermMap.next (sval (permMapsUnion (canonical Hinv) (no_race Hinv)))). *)
-(*       { rewrite <- Hrestrict_pmap. unfold restrPermMap. simpl. *)
-(*         rewrite Heq. reflexivity. } *)
-(*       assert (Hnext_step: (Mem.nextblock m1 <= Mem.nextblock m1')%positive). *)
-(*       { destruct Hcorestep as [c'' [m1'' [Hcorestep Hrefl]]]. *)
-(*         unfold corestepN in Hrefl. inversion Hrefl; subst c'' m1''. *)
-(*         clear Hinv'. *)
-(*         apply corestep_fwd in Hcorestep. *)
-(*           by apply forward_nextblock in Hcorestep. *)
-(*       } *)
-(*       rewrite Hnext_eq in Hnext_step. *)
-(*       assert (pf': tid0 < num_threads tp') by (subst; simpl; assumption). *)
-(*       assert (Hnext_m1' : Mem.nextblock m1' = PermMap.next (getThreadPerm tp' (Ordinal pf'))). *)
-(*       { subst tp'. simpl. rewrite if_true. reflexivity. *)
-(*         apply/eqP. apply f_equal. erewrite leq_pf_irr; eauto. } *)
-(*       assert (Hgt_m1': forall tid, ~ Coqlib.Plt (Mem.nextblock m1') *)
-(*                                 (PermMap.next (getThreadPerm tp' tid))). *)
-(*       { intros tid' Hcontra. subst tp'. simpl in Hcontra. *)
-(*         destruct ( tid' == *)
-(*                    Ordinal (n:=num_threads tp) (m:=tid0) Htid0_lt_pf) eqn:Hguard; *)
-(*           rewrite Hguard in Hcontra; simpl in Hcontra. *)
-(*         - unfold Coqlib.Plt in Hcontra. eapply Pos.lt_irrefl; eassumption. *)
-(*         - specialize (Hgt tid'). simpl in *. *)
-(*           unfold Coqlib.Plt in Hcontra, Hgt. clear Hinv' Hcorestep. *)
-(*           eapply Hgt. unfold getThreadPerm. *)
-(*           eapply Pos.le_lt_trans. eapply Hnext_step. *)
-(*           eassumption. *)
-(*       } *)
-(*       assert (Hnext_pnew : PermMap.next (sval pnew) = Mem.nextblock m1'). *)
-(*       { assert (Hinv'' := svalP pnew). simpl in Hinv''. *)
-(*         destruct Hinv'' as [_ [Hgt' [_ [_ [Hnext' _]]]]]. *)
-(*         unfold getThreadPerm in Hgt_m1'. simpl in Hgt', Hgt_m1'. *)
-(*         destruct Hnext' as [tid'' Hnext'']. *)
-(*         specialize (Hgt_m1' tid''). *)
-(*         unfold Coqlib.Plt in *. *)
-(*         specialize (Hgt' (Ordinal (n:=num_threads tp') (m:=tid0) pf')). *)
-(*         apply Pos.le_nlt in Hgt'. apply Pos.le_nlt in Hgt_m1'. *)
-(*         simpl in Hnext''. rewrite <- Hnext'' in Hgt_m1'. *)
-(*         unfold getThreadPerm in Hnext_m1'. simpl in *. rewrite <- Hnext_m1' in Hgt'. *)
-(*         eapply Pos.le_antisym; eassumption. *)
-(*       } *)
-(*       auto. *)
-(*     Qed. *)
 
   Hypothesis corestep_obs_eq :
     forall c1 c2 m1 m1' m2 R
@@ -510,6 +806,263 @@ Section FineStepLemmas.
       corestep the_sem the_ge (rename_code R c1) m1' (rename_code R c2) m2'
       /\ mem_obs_eq R m2 m2'.
 
+  Lemma fine_step_sim_aux :
+    forall fsched fsched' (tp1 tp2 tp1' : thread_pool) (m1 m2 m1' : mem) R (i : nat)
+      (Htp_simi: tp_sim tp1 tp1' i R)
+      (Hmem_simi: mem_sim tp1 tp1' m1 m1' i R)
+      (Hstep1: fine_step (i :: fsched) tp1 m1 fsched tp2 m2),
+    exists tp2' m2', fine_step (i :: fsched') tp1' m1' fsched' tp2' m2' /\
+                (forall tid, tp_sim tp1 tp1' tid R -> tp_sim tp2 tp2' tid R) /\
+                (forall tid, mem_sim tp1 tp1' m1 m1' tid R ->
+                        mem_sim tp2 tp2' m2 m2' tid R).
+  Proof with (eauto 3 with mem).
+    intros.
+    assert (Hcompatible2: mem_compatible tp2 m2) by (eapply fine_step_compatible; eauto).
+    inversion Hstep1 as [tsched tp tp' m m1i c m' c' tid0 pf0].
+    subst tid0 tsched tp' m' m tp.
+    inversion Hmem_simi as [pf_tid0 pf_tid0' m_tid0 m_tid0' m_tid0_eq m_tid0_eq'
+                                    Hmem_comp0 Hcompatible'];
+      pf_irr_clean; pf_cleanup.
+    destruct HcorestepN as [c2 [m2it [Hcore Hrefl]]].
+    unfold corestepN in Hrefl. inversion Hrefl; subst c' m2it.
+    assert (Hm_eq: m_tid0 = m1i).
+    { rewrite <- Hrestrict. rewrite <- Hrestrict_pmap.
+      apply restrPermMap_irr. reflexivity. }
+    subst m_tid0. rewrite Hm_eq in Hmeq.
+    assert (Hobs_core: mem_obs_eq R m1i m_tid0')...
+    destruct (corestep_obs_eq _ _ _ Hobs_core Hcore) as [m2' [Hcore' Hobs']].
+    assert (HcoreN': corestepN the_sem the_ge 1 (rename_code R c) m_tid0' (rename_code R c2) m2')
+      by (unfold corestepN; eexists; eauto).
+    inversion Htp_simi.
+    unfold getThreadC in Hthread.
+    pf_cleanup.
+    rewrite Hthread in Hpool.
+    assert (Hget': getThreadC tp1' (Ordinal pf_tid0') = rename_code R c)
+           by (by unfold getThreadC).
+    remember (updThread tp1' (Ordinal pf_tid0') (rename_code R c2)
+                        (getCurPerm m2') (counter tp1')) as tp2' eqn:Htp2'.
+    exists tp2'; exists m2'.
+    split; [eapply @step_fine with (c := rename_code R c) (m' := m2'); eauto |].
+    split.
+    { (* Proof of tp_sim *)
+      intros tid Htp_sim.
+      subst tp2' tp2.
+      destruct (tid < num_threads ((updThread tp1 (Ordinal pf0)
+                                              c2 (getCurPerm m2)
+                                              (counter tp1)))) eqn:pf_tid;
+        [|inversion Htp_sim; simpl in pf_tid; unfold is_true in *; congruence]. 
+      assert (pf_tid':
+                tid < num_threads
+                        ((updThread tp1' (Ordinal (n:=num_threads tp1') pf_tid0')
+                                    (rename_code R c2) (getCurPerm m2') 
+                                    (counter tp1'))))
+        by (simpl in *; rewrite <- Hnum; assumption).
+      apply Tp_sim with (pf := pf_tid) (pf' := pf_tid'). simpl. assumption.
+        by simpl.
+        simpl.
+        destruct (tid == i) eqn:Htid_eq;
+          move/eqP:Htid_eq=>Htid_eq.
+      + subst. pf_cleanup. rewrite if_true. rewrite if_true.
+        reflexivity. apply/eqP. apply f_equal.
+        reflexivity.
+        apply/eqP. pf_cleanup. apply f_equal.
+        erewrite leq_pf_irr; eauto.
+      + rewrite if_false. rewrite if_false.
+        inversion Htp_sim. simpl in pf_tid, pf_tid'. pf_cleanup.
+        assert (pf = pf_tid) by (erewrite leq_pf_irr; eauto); subst pf.
+        rewrite Hpool0.
+        do 2 apply f_equal. reflexivity.
+        apply/eqP. intro Hcontra. inversion Hcontra; auto.
+        apply/eqP. intro Hcontra. inversion Hcontra; auto.
+        match goal with
+          | [|- invariant ?Expr] => remember Expr as tp2
+        end.
+        eapply @updThread_invariants with (tp := tp1) (n0:=0) (tp' := tp2); eauto.
+        unfold corestepN.
+        exists c2 m2. auto.
+        match goal with
+          | [|- invariant ?Expr] => remember Expr as tp2'
+        end.
+        eapply @updThread_invariants with (tp := tp1') (tp' := tp2'); eauto.
+    }
+    { (* Proof of mem_sim *)
+      intros tid Hmem_sim. subst tp2'.
+      inversion Hmem_sim as [pf_tid pf_tid' m_tid m_tid' m_tid_eq m_tid_eq'
+                                    Hcomp2 Hcomp2'
+                                    Hrestrict_tid Hrestrict_tid'
+                                    Hmeq_tid Hmeq_tid' Hobs_tid].
+      assert (pf2_tid: tid < num_threads ((updThread tp1 (Ordinal pf0)
+                                                     c2 (getCurPerm m2) (counter tp1))))
+        by (simpl in *; assumption).
+      assert (pf2_tid':
+                tid < num_threads
+                        (updThread tp1' (Ordinal pf_tid0')
+                                   (rename_code R c2) (getCurPerm m2') 
+                                   (counter tp1')))
+        by (simpl in *; assumption). pf_irr_clean.
+      destruct (tid == i) eqn:Htid_eq; move/eqP:Htid_eq=>Htid_eq.
+      + subst tid tp2.
+        
+        assert (restrPermMap
+                    (permMapsInv_lt (perm_comp Hcompatible2)
+                                    (Ordinal pf2_tid)) =~ m2).
+        { simpl.
+          assert (pf2_tid = pf_tid) by (erewrite leq_pf_irr; eauto);
+            subst pf2_tid.
+          unfold mem_func_eq, getThreadPerm.
+          split; [reflexivity | split; [|reflexivity]].
+          simpl.
+          
+          
+          
+          simpl.
+          rewrite if_true. simpl.
+          rewrite 
+          split; [symmetry | split; symmetry]; eauto with permMaps.
+            by apply/eqP.
+        assert(restrPermMap 
+                            (permMapsInv_lt (svalP _)
+                                            (Ordinal pf2_tid)) =~ m2i).
+        { simpl.
+          assert (pf2_tid = Htid0_lt_pf0) by (erewrite leq_pf_irr; eauto).
+          subst pf2_tid.
+          unfold restrPermMap, mem_func_eq. simpl.
+          rewrite if_true. simpl.
+          split; [symmetry | split; symmetry]; eauto with permMaps.
+            by apply/eqP.
+        } 
+        match goal with
+          | [H: updPermMap m2i' ?Expr = Some _ |- _] =>
+            remember Expr as pnew' eqn:Hpnew'
+        end.
+        assert (Heq2i': pnew' = getPermMap m2')
+          by (apply updPermMap_get in Hupd2'; symmetry; assumption).
+        subst pnew'.
+        assert(restrPermMap Heq2i'
+                            (permMapsInv_lt (svalP _)
+                                            (Ordinal pf2_tid')) =~ m2i').
+        { simpl.
+          unfold restrPermMap, mem_func_eq. simpl.
+          rewrite if_true. simpl.
+          split; [symmetry | split; symmetry]; eauto with permMaps.
+          apply/eqP; apply f_equal; erewrite leq_pf_irr; eauto.
+        }
+        econstructor; eauto.
+      + assert (Heq2_tid: sval pnew = getPermMap m2)
+          by (apply updPermMap_get in Hupd; symmetry; assumption).
+        destruct pnew as [pnewV pnewP].
+        assert (Hlt2_tid: permMapLt (perm_maps tp1 (Ordinal (n:=num_threads tp1) (m:=tid) pf_tid))
+                          pnewV).
+        { assert (Hperm_eq:
+                    getThreadPerm tp1 (Ordinal pf_tid) =
+                    getThreadPerm (updThread tp1
+                                             (Ordinal Htid0_lt_pf0)
+                                             (Krun c1)
+                                             (getPermMap m2i) 
+                                             (counter tp1)) (Ordinal pf2_tid)).
+          { simpl. rewrite if_false. unfold getThreadPerm.
+            pf_cleanup. reflexivity.
+            apply/eqP; intro Hcontra; inversion Hcontra; auto.
+          }
+          unfold getThreadPerm in Hperm_eq.
+          rewrite Hperm_eq.
+          apply permMapsInv_lt. 
+          apply pnewP.
+        }
+        remember (restrPermMap Heq2_tid Hlt2_tid) as m2_tid eqn:Hrestrict2_tid;
+          symmetry in Hrestrict2_tid.
+        assert (Hobs_eq2: mem_obs_eq id m_tid m2_tid).
+        { eapply corestep_disjoint_mem_obs_id
+          with (m1j := m_tid) (m2j := m2_tid) (m1i := m1i) (m2i := m2i) (m2 := m2)
+                              (pnew := pnewV) (Heq2 := Heq2_tid)
+                              (p1j := perm_maps tp1 (Ordinal pf_tid))
+                              (Heq1 := Heq0)
+                              (Hlt1j := (permMapsInv_lt
+                                           (svalP (permMapsUnion (canonical Hinv0) (no_race Hinv0)))
+                                           (Ordinal (n:=num_threads tp1) (m:=tid) pf_tid)))
+                              (Hlt1i := (permMapsInv_lt
+                                           (svalP (permMapsUnion (canonical Hinv0) (no_race Hinv0)))
+                                                        (Ordinal Htid0_lt_pf0)))
+                              (Hlt2j := Hlt2_tid).
+          - assumption.
+          - assumption.
+          - rewrite <- Hrestrict_tid.
+            reflexivity.
+          - rewrite Hm_eq. reflexivity.
+          - destruct Hinv0; auto.
+          - eassumption.
+        } 
+        match goal with
+          | [H: updPermMap m2i' ?Expr = Some _ |- _] =>
+            pose Expr as pnew'
+        end.
+        assert (Heq2_tid': pnew' = getPermMap m2')
+          by (apply updPermMap_get in Hupd2'; symmetry; assumption).
+        assert (Hlt2_tid': permMapLt (perm_maps tp1' (Ordinal pf_tid'))
+                                    pnew').
+        { assert (Hperm_eq:
+                    getThreadPerm tp1' (Ordinal pf_tid') =
+                    getThreadPerm (updThread tp1'
+                                             (Ordinal pf_tid0')
+                                             (Krun (rename_code R ci'))
+                                             (getPermMap m2i') 
+                                             (counter tp1')) (Ordinal pf2_tid')).
+        { simpl. rewrite if_false. unfold getThreadPerm.
+          pf_cleanup. reflexivity.
+          apply/eqP; intro Hcontra; inversion Hcontra; auto.
+        } subst pnew'.
+        unfold getThreadPerm in Hperm_eq.
+        rewrite Hperm_eq.
+        apply permMapsInv_lt. 
+        match goal with
+          | [ |- permMapsInv _ (sval ?X)] =>
+            apply (svalP X)
+        end.
+        }
+        remember (restrPermMap Heq2_tid' Hlt2_tid') as m2_tid' eqn:Hrestrict2_tid';
+          symmetry in Hrestrict2_tid'.
+        pf_irr_clean; pf_cleanup; simpl in *.
+        assert (Hobs_eq2': mem_obs_eq id m_tid' m2_tid').
+        { eapply corestep_disjoint_mem_obs_id
+          with (m1j := m_tid') (m2j := m2_tid') (m1i := m_tid0') (m2i := m2i') (pnew := pnew')
+                               (p1j := perm_maps tp1' (Ordinal pf_tid'))
+                               (Heq2 := Heq2_tid') (Heq1 := Heq')
+                               (Hlt1j := permMapsInv_lt
+                                           (svalP (permMapsUnion (canonical Hinv') (no_race Hinv')))
+                                                         (Ordinal pf_tid'))
+                               (Hlt1i := permMapsInv_lt
+                                           (svalP (permMapsUnion (canonical Hinv') (no_race Hinv')))
+                                           (Ordinal pf_tid0'))
+                               (Hlt2j := Hlt2_tid'). 
+          - assumption.
+          - assumption.
+          - rewrite Hrestrict_tid'. reflexivity.
+          - rewrite Hrestrict_tid0'. reflexivity.
+          - destruct Hinv'; auto.
+          - eassumption.
+        }
+        assert (Hobs_core2: mem_obs_eq R m2_tid m2_tid').
+        { assert (mem_obs_eq R m_tid m2_tid').
+          apply mem_obs_trans with (m1j := m_tid) (m1'j := m_tid').
+          eapply mem_func_obs_eq; eauto. assumption.
+          eapply mem_obs_trans_comm; eauto. }
+        
+        econstructor; eauto.
+        simpl. rewrite <- Hrestrict2_tid.
+        simpl. unfold mem_func_eq. split; eauto. split; eauto.
+        simpl. rewrite if_false. reflexivity.
+        apply/eqP; intros Hcontra; inversion Hcontra; auto.
+        rewrite <- Hrestrict2_tid'. simpl. unfold mem_func_eq.
+        split; eauto. split; eauto.
+        simpl. rewrite if_false. reflexivity.
+        apply/eqP; intros Hcontra; inversion Hcontra; auto.
+    }
+        
+        
+        
+    }
+
+    
   Lemma corestep_sim_aux :
     forall fsched fsched' (tp1 tp2 tp1' : thread_pool) c1 (m1 m2 m1' : mem) R
       (i : nat) (pfi : i < num_threads tp1)

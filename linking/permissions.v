@@ -22,10 +22,10 @@ Section permMapDefs.
       | _, None => Some p1
       | Some p1', Some p2' =>
         match p1', p2' with
-          | Nonempty, _ => Some p2
-          | _, Nonempty => Some p1
           | Freeable, _ => None
           | _, Freeable => None
+          | Nonempty, _ => Some p2
+          | _, Nonempty => Some p1
           | Writable, _ => None
           | _, Writable => None
           | Readable, Readable => Some (Some Readable)
@@ -58,11 +58,9 @@ Section permMapDefs.
   Defined.
 
   Inductive not_racy : option permission -> Prop :=
-  | non_empty : not_racy (Some Nonempty)
   | empty : not_racy None.
 
   Inductive racy : option permission -> Prop :=
-  | writable : racy (Some Writable)
   | freeable : racy (Some Freeable).
 
   Lemma not_racy_union :
@@ -137,6 +135,32 @@ Section permMapDefs.
 
   Definition getPermMap (m : mem) : Maps.PMap.t (Z -> perm_kind -> option permission) :=
     Mem.mem_access m.
+
+  Lemma getCur_Max : forall m b ofs,
+                       Mem.perm_order'' (Maps.PMap.get b (getMaxPerm m) ofs)
+                                        (Maps.PMap.get b  (getCurPerm m) ofs).
+  Proof.
+    intros. 
+    assert (Hlt:= Mem.access_max m b ofs).
+    unfold Mem.perm_order'' in *.
+    unfold getMaxPerm, getCurPerm.
+    do 2 rewrite Maps.PMap.gmap.
+    auto.
+  Qed.
+
+  Lemma getMaxPerm_correct :
+    forall m b ofs,
+      Maps.PMap.get b (getMaxPerm m) ofs = Maps.PMap.get b (Mem.mem_access m) ofs Max.
+  Proof.
+    intros. unfold getMaxPerm. by rewrite Maps.PMap.gmap.
+  Qed.
+
+  Lemma getCurPerm_correct :
+    forall m b ofs,
+      Maps.PMap.get b (getCurPerm m) ofs = Maps.PMap.get b (Mem.mem_access m) ofs Cur.
+  Proof.
+    intros. unfold getCurPerm. by rewrite Maps.PMap.gmap.
+  Qed.
   
   Definition permMapsDisjoint (pmap1 pmap2 : access_map) : Prop :=
     forall b ofs, exists pu,

@@ -1114,6 +1114,36 @@ Section FineStepLemmas.
 End FineStepLemmas.
 End FineStepLemmas.
 
+Module FineSafety.
+Section FineSafety.
+
+  Import Concur ThreadPool MemoryObs SimDefs StepLemmas.
+
+  Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
+  
+  Notation thread_pool := (t cT).
+  Notation perm_map := access_map.
+  Notation invariant := (@invariant cT G the_sem).
+  
+  Variable the_ge : G.
+  Variable rename_code : (block -> block) -> cT -> cT.
+
+  Context {Z : Type}.
+  (* Discuss how to instantiate these*)
+  Variable extSpec : external_specification Mem.mem external_function Z.
+  Variable compute_init_perm : G -> perm_map.
+  Variable lp_code : cT.
+  Variable z : Z.
+
+  Notation coarse_semantics := (@coarse_semantics cT G the_sem compute_init_perm lp_code).
+
+  Variable init_memory : thread_pool -> Mem.mem.
+  (* Must be restricted to initial programs? confused about initial_core *)
+  Definition coarse_safety (tp : thread_pool) :=
+    forall Ω, exists A, forall n,
+                safeN (coarse_semantics Ω A) extSpec the_ge n z (Ω,tp) (init_memory tp).
+
+  Definition 
 
 (* Move to another file*)
 Module In2.

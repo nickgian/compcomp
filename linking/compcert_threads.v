@@ -428,42 +428,6 @@ Proof.
    end; tauto.
 Qed.
   
-(* Lemma updPermMap_nextblock : *)
-(*   forall (m : mem) (p : PermMap.t) m' *)
-(*     (Hupd: updPermMap m p = Some m'), *)
-(*     Mem.nextblock m = Mem.nextblock m'. *)
-(* Proof. *)
-(*   unfold updPermMap. intros. *)
-(*   destruct (Pos.eq_dec (Mem.nextblock m) (PermMap.next p)) as [Heq | Heq]. *)
-(*   inversion Hupd. simpl. by rewrite Heq. *)
-(*   discriminate. *)
-(* Qed. *)
-
-(* Lemma updPermMap_contents: *)
-(*   forall (m m' : mem) (pnew : PermMap.t) *)
-(*          (Hupd: updPermMap m pnew = Some m'), *)
-(*     Mem.mem_contents m = Mem.mem_contents m'. *)
-(* Proof. *)
-(*   intros. *)
-(*   unfold updPermMap in Hupd. *)
-(*   destruct (Pos.eq_dec (Mem.nextblock m) (PermMap.next pnew)). *)
-(*   inversion Hupd. reflexivity. *)
-(*   discriminate. *)
-(* Qed. *)
-
-(* Definition updPermMap_get pmap m m' *)
-(*            (Hupd: updPermMap m pmap = Some m') : *)
-(*   getPermMap m' = pmap. *)
-(* Proof. *)
-(*   intros. *)
-(*   unfold updPermMap in Hupd. *)
-(*   destruct (Pos.eq_dec (Mem.nextblock m) (PermMap.next pmap)) eqn:Heq. *)
-(*   inversion Hupd; subst. *)
-(*   unfold getPermMap.  *)
-(*   destruct pmap. reflexivity. *)
-(*   discriminate. *)
-(* Qed. *)
-
 Lemma no_race_wf : forall tid (pf: tid < (num_threads tp)) (Hrace: race_free tp),
                      permMap_wf tp (getThreadPerm tp (Ordinal pf)) tid.
 Proof.
@@ -727,9 +691,8 @@ Module Concur.
       Definition halted (st : list nat * thread_pool) : option val := None.
 
       Variable compute_init_perm : G -> access_map.
-      Variable sched : list nat.
       Variable lp_code : cT.
-      Hypothesis lp_halted : semantics.halted the_sem lp_code = Some (Vint Int.zero). 
+      Variable sched : list nat.
 
       Definition initial_core the_ge (f : val) (args : list val) : option (list nat * thread_pool) :=
         match initial_core the_sem the_ge f args with

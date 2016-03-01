@@ -46,6 +46,8 @@ Notation UNLOCK := (EF_external 8%positive UNLOCK_SIG).
 
 Require Import compcert_linking threads_lemmas permissions.
 
+Load concurrent_machine. (*TODO: Compile this and import it properly*)
+
 Ltac pf_cleanup :=
   repeat match goal with
            |[H1: is_true (leq ?X ?Y), H2: is_true (leq ?X ?Y) |- _] =>
@@ -455,17 +457,23 @@ congruence.
 Qed.
 
 Module Concur.
+
   Section Concur.
     
     Import ThreadPool.
     Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
-
-    Notation thread_pool := (t cT).
+    
+    Notation cT' := (@ctl cT).
+    Notation thread_pool := (t cT').
     Notation perm_map := access_map.
+
+    Definition containsThread: ThreadPool.t cT' -> nat -> Prop:=
+    fun ms tid0 => tid0 < (ThreadPool.num_threads ms).
 
     Variable the_ge : G.
     Variable aggelos : nat -> perm_map.
-
+    Variable lp_id : nat.
+      
     Record invariant tp :=
       { canonical : forall tid, isCanonical (perm_maps tp tid);
         no_race : race_free tp;
@@ -474,52 +482,41 @@ Module Concur.
       }.
         
     (* Semantics of the coarse-grained concurrent machine*)
-
-    Inductive coarse_step : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop :=
-    | step_coarse:
-        forall sched tp tp' m m1 c m' (c' : cT) n0 tid0
-          (Htid0_lt_pf : tid0 < num_threads tp),
+    Definition cont2ord {ms tid0} (cnt: containsThread ms tid0):
+      'I_(num_threads ms).
+        inversion cnt. assert (tid0 < num_threads ms)%nat. auto.
+        apply (Ordinal H).
+    Defined.
+      
+    Inductive dry_step: forall {tid0 tp m},
+      containsThread tp tid0 -> mem_compatible tp m -> thread_pool -> mem  -> Prop :=
+    | step_dry :
+        forall tid0 (tp tp':thread_pool) c m1 m m' (c' : cT)
+          (cnt: containsThread tp tid0),
           let: n := counter tp in
-          let: tid := Ordinal Htid0_lt_pf in
-          forall
-            (Hinv: invariant tp)
-            (Hcompatible: mem_compatible tp m)
+          let: tid := cont2ord cnt in
+          forall (Hcompatible: mem_compatible tp m)
             (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
-            (Hthread: getThreadC tp tid = c)
-            (HcorestepN: corestepN the_sem the_ge (S n0) c m1 c' m')
-            (Hcant: cant_step the_sem c')
-            (Htp': tp' = updThread tp tid c' (getCurPerm m') n),
-            coarse_step (tid0 :: sched) tp m sched tp' m'.
+            (Hthread: getThreadC tp tid = Krun c)
+            (HcorestepN: corestep the_sem the_ge c m1 c' m')
+            (Htp': tp' = @updThread cT' tp tid (Krun c') (getCurPerm m') n),
+            dry_step cnt Hcompatible tp' m'.
     
-    Inductive fine_step : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop :=
-    | step_fine:
-        forall sched tp tp' m m1 c m' (c' : cT) tid0
-          (Htid0_lt_pf :  tid0 < num_threads tp),
-          let: n := counter tp in
-          let: tid := Ordinal Htid0_lt_pf in
-          forall
-            (Hinv: invariant tp)
-            (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
-            (Hthread: getThreadC tp tid = c)
-            (HcorestepN: corestepN the_sem the_ge 1 c m1 c' m')
-            (Htp': tp' = updThread tp tid c' (getCurPerm m') n),
-            fine_step (tid0 :: sched) tp m sched tp' m'.
-
+    
     (*missing lock-ranges*)
-    Inductive ext_step : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop :=
+    Inductive ext_step {tid0 tp m}
+              (cnt0:containsThread tp tid0)(Hcompat:mem_compatible tp m):
+      thread_pool -> mem -> bool -> Prop :=
     | step_lock :
-        forall sched tp tp' m m1 c c' m' b ofs tid0
-          (Htid0_lt_pf : tid0 < num_threads tp)
-          (pf_lp : 0 < num_threads tp),
+        forall (tp':thread_pool) m1 c c' m' b ofs
+          (cnt_lp: containsThread tp lp_id),
           let: n := counter tp in
-          let: tid := Ordinal Htid0_lt_pf in
-          let: lp := Ordinal pf_lp in
+          let: tid := cont2ord cnt0 in
+          let: lp := cont2ord cnt_lp in
           forall
-            (Hthread: getThreadC tp tid = c)
+            (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (LOCK, ef_sig LOCK, Vptr b ofs::nil))
-            (Hinv: invariant tp)
             (Hcompatible: mem_compatible tp m)
             (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.one))
@@ -527,153 +524,230 @@ Module Concur.
             (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
             (* (Hangel_wf: permMap_wf tp (aggelos n) tid0) *)
             (* (Hangel_canonical: isCanonical (aggelos n)) *)
-            (Htp': tp' = updThread tp tid c' (aggelos n) (n+1)),
-            ext_step (tid0 :: sched) tp m sched tp' m'
+            (Htp': tp' = updThread tp tid (Kresume c') (aggelos n) (n+1)),
+            ext_step cnt0 Hcompat tp' m' true 
                        
     | step_unlock :
-        forall sched tp tp' m m1 c c' m' b ofs tid0
-          (Htid0_lt_pf : tid0 < num_threads tp)
-          (pf_lp : 0 < num_threads tp),
+        forall  (tp':thread_pool) m1 c c' m' b ofs
+          (cnt_lp: containsThread tp lp_id),
           let: n := counter tp in
-          let: tid := Ordinal Htid0_lt_pf in
-          let: lp := Ordinal pf_lp in
+          let: tid := cont2ord cnt0 in
+          let: lp := cont2ord cnt_lp in
           forall
-            (Hthread: getThreadC tp tid = c)
+            (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (UNLOCK, ef_sig UNLOCK, Vptr b ofs::nil))
-            (Hinv: invariant tp)
-            (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompat) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero))
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.one) = Some m')
             (* what does the return value denote?*)
             (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
             (* (Hangel_wf: permMap_wf tp (aggelos n) tid0) *)
             (* (Hangel_canonical: isCanonical (aggelos n)) *)
-            (Htp': tp' = updThread tp tid c' (aggelos n) (n+1)),
-            ext_step (tid0 :: sched) tp m sched tp' m'
+            (Htp': tp' = updThread tp tid (Kresume c') (aggelos n) (n+1)),
+            ext_step cnt0 Hcompat tp' m' true 
                        
     | step_create :
-        forall sched tp tp_upd tp' m c c' c_new vf arg tid0
-          (Htid0_lt_pf : tid0 < num_threads tp),
+        forall  (tp_upd tp':thread_pool) c c' c_new vf arg,
           let: n := counter tp in
-          let: tid := Ordinal Htid0_lt_pf in
+          let: tid := cont2ord cnt0 in
           forall
-            (Hthread: getThreadC tp tid = c)
+            (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (CREATE, ef_sig CREATE, vf::arg::nil))
-            (Hinv: invariant tp)
             (Hinitial: semantics.initial_core the_sem the_ge vf (arg::nil) = Some c_new)
             (Hafter_external: semantics.after_external the_sem
                                                        (Some (Vint Int.zero)) c = Some c')
-            (Htp': tp_upd = updThread tp tid c' (aggelos n) (n.+2))
+            (Htp': tp_upd = updThread tp tid (Kresume c') (aggelos n) (n.+2))
             (* (Hangel_wf: permMap_wf tp (aggelos n) tid0) *)
             (* (Hangel_canonical: isCanonical (aggelos n)) *)
             (* (Hangel_wf2: newPermMap_wf tp_upd (aggelos (n.+1))) *)
             (* (Hangel_canonical2: isCanonical (aggelos (n.+1))) *)
-            (Htp': tp' = addThread tp_upd c_new (aggelos n.+1)),
-            ext_step (tid0 :: sched) tp m sched tp' m
+            (* NOTE: Something to be done with the new thread!!! *)
+            (Htp': tp' = addThread tp_upd (Kresume c_new) (aggelos n.+1)),
+            ext_step cnt0 Hcompat tp' m true
                        
     | step_mklock :
-        forall sched tp tp' tp'' m m1 c c' m' b ofs pmap_tid' pmap_lp tid0
-          (Htid0_lt_pf : tid0 < num_threads tp)
-          (pf_lp : 0 < num_threads tp)
-          (pf_lp' : 0 < num_threads tp'),
+        forall  (tp' tp'': thread_pool) m1 c c' m' b ofs pmap_tid' pmap_lp
+          (cnt_lp': containsThread tp' lp_id)
+          (cnt_lp: containsThread tp lp_id),
           let: n := counter tp in
-          let: tid := Ordinal Htid0_lt_pf in
-          let: lp := Ordinal pf_lp in
-          let: lp' := Ordinal pf_lp' in
+          let: tid := cont2ord cnt0 in
+          let: lp := cont2ord cnt_lp in
+          let: lp' := cont2ord cnt_lp' in
           let: pmap_tid := getThreadPerm tp tid in
           forall
-            (Hthread: getThreadC tp tid = c)
+            (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (MKLOCK, ef_sig MKLOCK, Vptr b ofs::nil))
-            (Hinv: invariant tp)
-            (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompat) tid) = m1)
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m')
             (Hdrop_perm:
                setPerm (Some Nonempty) b (Int.intval ofs) pmap_tid = pmap_tid')
             (Hlp_perm: setPerm (Some Writable) b (Int.intval ofs) (getThreadPerm tp lp) = pmap_lp)
             (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
-            (Htp': tp' = updThread tp tid c' pmap_tid' (n+1))
+            (Htp': tp' = updThread tp tid (Kresume c') pmap_tid' (n+1))
             (Htp'': tp'' = updThreadP tp' lp' pmap_lp),
-            ext_step (tid0 :: sched) tp m sched tp'' m'
+            ext_step cnt0 Hcompat tp'' m' true 
                        
     | step_freelock :
-        forall sched tp tp' tp'' m c c' b ofs pmap_lp' tid0
-          (Htid0_lt_pf : tid0 < num_threads tp)
-          (pf_lp : 0 < num_threads tp)
-          (pf_lp' : 0 < num_threads tp'),
+        forall  (tp' tp'': thread_pool) c c' b ofs pmap_lp'
+          (cnt_lp': containsThread tp' lp_id)
+          (cnt_lp: containsThread tp lp_id),
           let: n := counter tp in
-          let: tid := Ordinal Htid0_lt_pf in
-          let: lp := Ordinal pf_lp in
-          let: lp' := Ordinal pf_lp' in
-          let: pmap_lp := getThreadPerm tp lp in
+          let: tid := cont2ord cnt0 in
+          let: lp := cont2ord cnt_lp in
+          let: lp' := cont2ord cnt_lp' in
+          let: pmap_lp := getThreadPerm tp tid in
           forall
-            (Hthread: getThreadC tp tid = c)
+            (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (FREE_LOCK, ef_sig FREE_LOCK, Vptr b ofs::nil))
-            (Hinv: invariant tp)
-            (Hcompatible: mem_compatible tp m)
             (Hdrop_perm:
                setPerm None b (Int.intval ofs) pmap_lp = pmap_lp')
             (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
             (*the angel must provide the permissions for the thread - freeable or writeable *)
             (* (Hangel_wf: permMap_wf tp (aggelos n) tid0) *)
             (* (Hangel_canonical: isCanonical (aggelos n)) *)
-            (Htp': tp' = updThread tp tid c' (aggelos n) (n+1))       
+            (Htp': tp' = updThread tp tid (Kresume c') (aggelos n) (n+1))       
             (Htp'': tp'' = updThreadP tp' lp' pmap_lp'),
-            ext_step (tid0 :: sched) tp m sched tp'' m
+            ext_step cnt0 Hcompat  tp'' m true 
                        
     | step_lockfail :
-        forall sched tp m c b ofs tid0 m1
-          (Htid0_lt_pf : tid0 < num_threads tp)
-          (pf_lp : 0 < num_threads tp),
-          let: tid := Ordinal Htid0_lt_pf in
-          let: lp := Ordinal pf_lp in
+        forall  c b ofs m1
+          (cnt_lp: containsThread tp lp_id),
+          let: n := counter tp in
+          let: tid := cont2ord cnt0 in
+          let: lp := cont2ord cnt_lp in
           forall
-            (Hthread: getThreadC tp tid = c)
+            (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (LOCK, ef_sig LOCK, Vptr b ofs::nil))
-            (Hinv: invariant tp)
-            (Hcompatible: mem_compatible tp m)
-            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) lp) = m1)
+            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompat) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
-            ext_step (tid0 :: sched) tp m sched tp m.
-
-    Inductive step (t_step : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop)
-    : list nat -> thread_pool -> mem -> list nat -> thread_pool -> mem -> Prop :=
-    | step_core:
-        forall tid sched tp tp' m m'
-          (Ht_step: t_step (tid :: sched) tp m sched tp' m'),
-          step t_step (tid :: sched) tp m sched tp' m'
-               
-    | step_halted:
-        forall sched tp m c tid0
-          (Htid0_lt_pf : tid0 < num_threads tp),
-          let: tid := Ordinal Htid0_lt_pf in
-          forall
-            (Hthread: getThreadC tp tid = c)
-            (Hcant: halted the_sem c),
-            step t_step (tid0 :: sched) tp m sched tp m
-                 
-    | step_ext:
-        forall tid sched tp tp' m m'
-          (Hext_step: ext_step (tid :: sched) tp m sched tp' m'),
-          step t_step (tid :: sched) tp m sched tp' m'
-
-    | step_schedfail :
-        forall sched tp m tid0
-          (Htid0_lt_pf : tid0 >= num_threads tp),
-          step t_step (tid0 :: sched) tp m sched tp m.
+            ext_step cnt0 Hcompat tp m false.
+  End Concur.
+  
+  Module Type DrySemantics.
+    Parameter G: Type.
+    Parameter C: Type.
+    Definition M: Type:= mem.
+    Parameter Sem: CoreSemantics G C M.
+  End DrySemantics.
+  
+  Module DryMachineSig (Sem: DrySemantics) <:ConcurrentMachineSig NatTID.
+    (*TID = NAT*)
+    Definition tid := nat.                                             
+    (*Memories*)
+    Definition richMem: Type:= Sem.M.
+    Definition dryMem: richMem -> mem:= id.
+  
+    (*CODE*)
+    Definition cT: Type:= Sem.C.
+    Definition G: Type:= Sem.G.
+    Definition Sem := Sem.Sem.
+    Definition cT': Type := @ctl cT.
     
-    End Concur.
+    (*thread pool*)
+    Import ThreadPool.  
+    Notation thread_pool := (t cT').  
+    
+    (*MACHINE VARIABLES*)
+    Definition machine_state: Type:= thread_pool.
+    Definition containsThread: machine_state -> tid -> Prop:=
+      fun ms tid0 => tid0 < (num_threads ms).
+    Definition lp_id : tid:= 0.
+      
+    (*INVARIANTS*)
+    (*The state respects the memory*)
+    Definition mem_compatible: machine_state -> mem -> Prop:=
+      @mem_compatible cT'.
+        
+    (*Steps*)
+    Definition cstep (genv:G): forall {tid0 ms m},
+        containsThread ms tid0 -> mem_compatible ms m -> machine_state -> mem  -> Prop:=
+      @dry_step cT G Sem genv.
+  Inductive resume_thread': forall {tid0} {ms:machine_state},
+        containsThread ms tid0 -> machine_state -> Prop:=
+  | ResumeThread: forall tid0 ms ms' c
+                    (ctn: containsThread ms tid0)
+                    (HC: getThreadC ms (cont2ord ctn) = Kresume c)
+                    (Hms': updThreadC ms (cont2ord ctn) (Krun c)  = ms'),
+      resume_thread' ctn ms'.
+  Definition resume_thread: forall {tid0 ms},
+      containsThread ms tid0 -> machine_state -> Prop:= @resume_thread'.
+
+   Inductive suspend_thread': forall {tid0} {ms:machine_state},
+        containsThread ms tid0 -> machine_state -> Prop:=
+  | SuspendThread: forall tid0 ms ms' c
+                    (ctn: containsThread ms tid0)
+                    (HC: getThreadC ms (cont2ord ctn) = Krun c)
+                    (Hms': updThreadC ms (cont2ord ctn) (Kstop c)  = ms'),
+      suspend_thread' ctn ms'.
+  Definition suspend_thread : forall {tid0 ms},
+       containsThread ms tid0 -> machine_state -> Prop:= @suspend_thread'.
+  Definition conc_call (genv:G): forall {tid0 ms m},
+     (nat -> access_map) -> containsThread ms tid0 -> mem_compatible ms m -> machine_state -> mem -> bool -> Prop:=
+    fun tid ms m aggelos => @ext_step cT G Sem genv aggelos lp_id tid ms m.
+  Inductive threadHalted': forall {tid0 ms},
+      containsThread ms tid0 -> Prop:=
+    | thread_halted':
+        forall tp c tid0
+          (ctn: containsThread tp tid0),
+          let: tid := cont2ord ctn in
+          forall
+            (Hthread: getThreadC tp tid = Krun c)
+            (Hcant: halted Sem c),
+            threadHalted' ctn. 
+  Definition threadHalted: forall {tid0 ms},
+      containsThread ms tid0 -> Prop:= @threadHalted'.
+
+  Parameter init_core : G -> val -> list val -> option machine_state.
+  End DryMachineSig.
+
+  (* Here I make the core semantics*)
+  Variable example_G: Type.
+  Variable example_C: Type.
+  Variable example_sem: CoreSemantics example_G example_C mem.
+  Module Sem: DrySemantics.
+                Definition G:= example_G.
+                Definition C:= example_C.
+                Definition M:= mem.
+                Definition Sem:=example_sem.
+  End Sem.
+  Module mySchedule := ListScheduler NatTID.
+  Module mySem := DryMachineSig Sem.
+  Module myCoarseSemantics :=
+    CoarseMachine NatTID mySchedule mySem.
+  Module myFineSemantics :=
+    FineMachine NatTID mySchedule mySem.
+
+  Definition coarse_semantics:=
+    myCoarseSemantics.MachineSemantics.
+  Definition fine_semantics:=
+    myFineSemantics.MachineSemantics.
+  
+End Concur.
+
+
+
+(* After this there needs to be some cleaning. *)
+
+
+
+
+
+
+
+
+
+
     Section InitialCore.
 
       Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
       Import ThreadPool.
 
+      
       Notation thread_pool := (t cT).
       Notation perm_map := access_map.
       

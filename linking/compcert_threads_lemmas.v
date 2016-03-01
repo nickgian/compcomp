@@ -333,35 +333,7 @@ Module StepLemmas.
 End StepLemmas.
         
 Module MemoryObs.
-  
-  Definition mem_func_eq (m m' : Mem.mem) :=
-    Mem.mem_contents m = Mem.mem_contents m' /\
-    Mem.mem_access m = Mem.mem_access m' /\
-    Mem.nextblock m = Mem.nextblock m'.
-
-  Notation "m1 '=~' m2" := (mem_func_eq m1 m2) (at level 50). 
-
-  Require Import Coq.Relations.Relation_Definitions.
-  
-  Instance meq_Reflexive : RelationClasses.Reflexive mem_func_eq.
-  Proof.
-    unfold RelationClasses.Reflexive. intros m. destruct m. unfold mem_func_eq. simpl.
-    auto.
-  Defined.
-  Instance meq_Symmetric : RelationClasses.Symmetric mem_func_eq.
-  Proof.
-    unfold RelationClasses.Symmetric, mem_func_eq. intros m m' [? [? ?]].
-    auto.
-  Defined.
-  Instance meq_Transitive  : RelationClasses.Transitive mem_func_eq.
-  Proof.
-    unfold RelationClasses.Transitive, mem_func_eq.
-    intros m m' m'' [Hcontents [Haccess Hblock]] [? [? ?]].
-    rewrite Hcontents Haccess Hblock. auto.
-  Defined.
-
-  Hint Resolve meq_Reflexive : mem.
-        
+          
   Record mem_obs_eq (f : block -> block) (m1 m2 : Mem.mem) :=
     { val_obs_eq :
         forall b1 b2 ofs (Hrenaming: f b1 = b2)
@@ -465,26 +437,6 @@ Module MemoryObs.
 
   Hint Resolve mem_obs_trans : mem.
   
-  Lemma mem_func_obs_eq:
-    forall (R : block -> block) (m1 m1' m1_eq m1'_eq : mem)
-           (Hmeq: m1 =~ m1_eq)
-           (Hmeq': m1' =~ m1'_eq)
-           (Hobs_eq: mem_obs_eq R m1_eq m1'_eq),
-      mem_obs_eq R m1 m1'.
-  Proof.
-    intros.
-    admit.
-    (* inversion Hmeq; inversion Hmeq'. *)
-    (* unfold Mem.perm, mem_func_eq in *; *)
-    (*   destruct Hmeq as [? [? ?]], Hmeq' as [? [? ?]]; *)
-    (*   destruct m1, m1', m1_eq, m1'_eq; simpl in *; subst; *)
-    (*   econstructor; auto; *)
-    (*   destruct (Hobs_eq b1 b2 ofs Hrenaming) as [Hcontents Hperm]; *)
-    (*   assumption. *)
-  Qed.
-
-  Hint Resolve mem_func_obs_eq : mem.
-
 End MemoryObs.
 
 Module SimDefs.
@@ -500,21 +452,23 @@ Section SimDefs.
   Notation perm_map := access_map.
   Notation invariant := (@invariant cT G the_sem).
   
-  Variable aggelos : nat -> perm_map.
-  Variable the_ge : G.
-
   Variable rename_code : (block -> block) -> cT -> cT.
 
+  Inductive weak_tp_sim (tp tp' : thread_pool) (tid : nat) (R: block -> block) : Prop :=
+  | Tp_weak_sim : forall (pf: tid < num_threads tp)
+                    (pf': tid < num_threads tp')
+                    (Hcounter: counter tp = counter tp')
+                    (Hpool: rename_code R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf'))
+                    (Hinv: invariant tp)
+                    (Hinv': invariant tp'),
+                    (* (Hperm: (perm_maps tp) (Ordinal pf) = (perm_maps tp') (Ordinal pf')), *)
+                    weak_tp_sim tp tp' tid R.
+
   Inductive tp_sim (tp tp' : thread_pool) (tid : nat) (R: block -> block) : Prop :=
-  | Tp_sim : forall (pf: tid < num_threads tp)
-               (pf': tid < num_threads tp')
-               (Hnum: num_threads tp = num_threads tp')
-               (Hcounter: counter tp = counter tp')
-               (Hpool: rename_code R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf'))
-               (Hinv: invariant tp)
-               (Hinv': invariant tp'),
-               (* (Hperm: (perm_maps tp) (Ordinal pf) = (perm_maps tp') (Ordinal pf')), *)
+  | Tp_sim : forall (Hweak_sim: weak_tp_sim tp tp' tid R)
+               (Hnum: num_threads tp = num_threads tp'),
                tp_sim tp tp' tid R.
+
 
   Inductive mem_sim (tp tp' : thread_pool) (m m' : Mem.mem) (tid : nat)
             (R : block -> block) : Prop :=
@@ -529,6 +483,7 @@ Section SimDefs.
                 mem_sim tp tp' m m' tid R.
 End SimDefs.
 
+Arguments weak_tp_sim {cT G the_sem} {rename_code} tp tp' tid R.
 Arguments tp_sim {cT G the_sem} {rename_code} tp tp' tid R.
 Arguments mem_sim {cT} tp tp' m m' tid R.
 End SimDefs.
@@ -544,7 +499,6 @@ Section FineStepLemmas.
   Notation perm_map := access_map.
   Notation invariant := (@invariant cT G the_sem).
   
-  Variable aggelos : nat -> perm_map.
   Variable the_ge : G.
   Variable rename_code : (block -> block) -> cT -> cT.
   
@@ -574,6 +528,7 @@ Section FineStepLemmas.
                Maps.PMap.get b (Mem.mem_access m') ofs k = None)).
 
   Notation tp_sim := (@tp_sim cT G the_sem rename_code).
+  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
   Notation fine_step := (@fine_step cT G the_sem the_ge).
 
   Hypothesis rename_code_at_ext :
@@ -687,10 +642,11 @@ Section FineStepLemmas.
     subst tid0 tsched tp' m' m tp.
     split.
     { (* Proof of tp_sim *)
-      inversion Htp_sim.
+      inversion Htp_sim as [Hweak_sim Hnum_threads]; inversion Hweak_sim.
       assert (pf2: j < num_threads tp2)
-             by (subst; simpl; auto).
-      eapply @Tp_sim with (pf := pf2) (pf' := pf'); simpl; eauto.
+        by (subst; simpl; auto).
+      constructor; [|subst tp2; simpl; auto].
+      eapply @Tp_weak_sim with (pf := pf2) (pf' := pf'); simpl; eauto.
       - subst; auto.
       - subst; auto.
       - subst; simpl. rewrite if_false. simpl in pf2. pf_cleanup. eassumption.
@@ -732,11 +688,11 @@ Section FineStepLemmas.
   Lemma fine_step_sim_invariant_r :
     forall sched (tp1 tp1' tp2' : thread_pool) (m1 m1' m2' : mem) (i j : nat)
       (R: block -> block) (Hneq: i <> j)
-      (Htp_sim: tp_sim tp1 tp1' j R)
+      (Htp_sim: weak_tp_sim tp1 tp1' j R)
       (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
       (Hstep: fine_step (i :: sched) tp1' m1' sched tp2' m2')
       (Hcompatible2: mem_compatible tp2' m2'),
-      tp_sim tp1 tp2' j R /\ mem_sim tp1 tp2' m1 m2' j R.
+      weak_tp_sim tp1 tp2' j R /\ mem_sim tp1 tp2' m1 m2' j R.
   Proof with (eauto 3 with mem).
     intros. inversion Hstep as [tsched' tp tp' m m1i' c m' c' tid0 pf0].
     subst tid0 tsched' tp' m' m tp.
@@ -745,7 +701,7 @@ Section FineStepLemmas.
       inversion Htp_sim.
       assert (pf2': j < num_threads tp2')
         by (subst; simpl; auto).
-      eapply @Tp_sim with (pf := pf) (pf' := pf2'); simpl; eauto.
+      eapply @Tp_weak_sim with (pf := pf) (pf' := pf2'); simpl; eauto.
       - subst; auto.
       - subst; auto.
       - subst; simpl. rewrite if_false. simpl in pf2'. pf_cleanup. eassumption.
@@ -847,11 +803,11 @@ Section FineStepLemmas.
 
   Lemma fine_step_sim_aux :
     forall fsched fsched' (tp1 tp2 tp1' : thread_pool) (m1 m2 m1' : mem) R (i : nat)
-      (Htp_simi: tp_sim tp1 tp1' i R)
+      (Htp_simi: weak_tp_sim tp1 tp1' i R)
       (Hmem_simi: mem_sim tp1 tp1' m1 m1' i R)
       (Hstep1: fine_step (i :: fsched) tp1 m1 fsched tp2 m2),
     exists tp2' m2', fine_step (i :: fsched') tp1' m1' fsched' tp2' m2' /\
-                (forall tid, tp_sim tp1 tp1' tid R -> tp_sim tp2 tp2' tid R) /\
+                (forall tid, weak_tp_sim tp1 tp1' tid R -> weak_tp_sim tp2 tp2' tid R) /\
                 (forall tid, mem_sim tp1 tp1' m1 m1' tid R ->
                         mem_sim tp2 tp2' m2 m2' tid R).
   Proof with (eauto 3 with mem).
@@ -871,7 +827,7 @@ Section FineStepLemmas.
                                   (permMapsInv_lt (perm_comp Hcompatible')
                                                   (Ordinal pf_tid0'))) (rename_code R c2) m2')
       by (unfold corestepN; eexists; eauto).
-    inversion Htp_simi.
+    inversion Htp_simi as [Hweak_simi Hnum_threads1]; inversion Hweak_simi.
     unfold getThreadC in Hthread.
     pf_cleanup.
     rewrite Hthread in Hpool.
@@ -890,28 +846,30 @@ Section FineStepLemmas.
       destruct (tid < num_threads ((updThread tp1 (Ordinal pf0)
                                               c2 (getCurPerm m2)
                                               (counter tp1)))) eqn:pf_tid;
-        [|inversion Htp_sim; simpl in pf_tid; unfold is_true in *; congruence]. 
-      assert (pf_tid':
-                tid < num_threads
+        [|inversion Htp_sim;
+          simpl in pf_tid; unfold is_true in *; congruence]. 
+      destruct (tid < num_threads
                         ((updThread tp1' (Ordinal (n:=num_threads tp1') pf_tid0')
                                     (rename_code R c2) (getCurPerm m2') 
-                                    (counter tp1'))))
-        by (simpl in *; rewrite <- Hnum; assumption).
-      apply Tp_sim with (pf := pf_tid) (pf' := pf_tid'). simpl. assumption.
-        by simpl.
-        simpl.
-        destruct (tid == i) eqn:Htid_eq;
-          move/eqP:Htid_eq=>Htid_eq.
-      + subst. pf_cleanup. rewrite if_true. rewrite if_true.
+                                    (counter tp1')))) eqn:pf_tid';
+        [|inversion Htp_sim;
+           simpl in pf_tid'; unfold is_true in *; congruence].
+      apply Tp_weak_sim with (pf := pf_tid) (pf' := pf_tid'). simpl. assumption.
+      simpl.
+      destruct (tid == i) eqn:Htid_eq;
+        move/eqP:Htid_eq=>Htid_eq.
+      + subst; simpl. rewrite if_true. rewrite if_true.
         reflexivity. apply/eqP. apply f_equal.
-        reflexivity.
+        simpl in pf_tid'. erewrite leq_pf_irr; eauto.
         apply/eqP. pf_cleanup. apply f_equal.
         erewrite leq_pf_irr; eauto.
       + rewrite if_false. rewrite if_false.
-        inversion Htp_sim. simpl in pf_tid, pf_tid'. pf_cleanup.
+        inversion Htp_sim.
+        simpl in pf_tid, pf_tid'. pf_cleanup.
         assert (pf = pf_tid) by (erewrite leq_pf_irr; eauto); subst pf.
         rewrite Hpool0.
-        do 2 apply f_equal. reflexivity.
+        do 2 apply f_equal.
+        erewrite leq_pf_irr; eauto.
         apply/eqP. intro Hcontra. inversion Hcontra; auto.
         apply/eqP. intro Hcontra. inversion Hcontra; auto.
         match goal with
@@ -1114,6 +1072,44 @@ Section FineStepLemmas.
 End FineStepLemmas.
 End FineStepLemmas.
 
+Module ExtStepLemmas.
+Section ExtStepLemmas.
+
+  Import Concur ThreadPool MemoryObs SimDefs StepLemmas.
+  Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
+  
+  Notation thread_pool := (t cT).
+  Notation perm_map := access_map.
+  Notation invariant := (@invariant cT G the_sem).
+  
+  Variable aggelos : nat -> perm_map.
+  Variable the_ge : G.
+  Variable rename_code : (block -> block) -> cT -> cT.
+
+  Notation tp_sim := (@tp_sim cT G the_sem rename_code).
+  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
+  Notation fine_step := (@fine_step cT G the_sem the_ge).
+  Notation ext_step := (@ext_step cT G the_sem the_ge aggelos).
+  
+  Lemma ext_step_sim :
+    forall fsched fsched' (tp1 tp2 tp3 tp1' : thread_pool) (m1 m2 m3 m1' : mem) R
+      (Hinvariant': invariant tp1')
+      (Hcompatible': invariant tp1')
+      (Hsim: forall tid, tid < num_threads tp1 -> tp_sim tp1 tp1' tid R /\
+                                            mem_sim tp1 tp1' m1 m1' tid R)
+      (i j : nat) (Hneq: i <> j)
+      (Hstep1: ext_step (i :: j :: fsched) tp1 m1 (j :: fsched) tp2 m2)
+      (Hstep2: fine_step (j :: fsched) tp2 m2 fsched tp3 m3),
+    exists tp2' m2' tp3' m3',
+      fine_step (j :: i :: fsched') tp1' m1' (i :: fsched') tp2' m2' /\
+      ext_step (i :: fsched') tp2' m2' fsched' tp3' m3' /\
+      (forall tid, tid < num_threads tp3 -> tp_sim tp3 tp3' tid R /\
+                                      mem_sim tp3 tp3' m3 m3' tid R).
+  Proof. Admitted.
+
+End ExtStepLemmas.
+End ExtStepLemmas.
+    
 Module FineSafety.
 Section FineSafety.
 
@@ -1136,14 +1132,31 @@ Section FineSafety.
   Variable z : Z.
 
   Notation coarse_semantics := (@coarse_semantics cT G the_sem compute_init_perm lp_code).
+  Notation fine_semantics := (@fine_semantics cT G the_sem compute_init_perm lp_code).
+  Notation fstep := (corestep fine_semantics).
 
   Variable init_memory : thread_pool -> Mem.mem.
-  (* Must be restricted to initial programs? confused about initial_core *)
-  Definition coarse_safety (tp : thread_pool) :=
-    forall Ω, exists A, forall n,
-                safeN (coarse_semantics Ω A) extSpec the_ge n z (Ω,tp) (init_memory tp).
 
-  Definition 
+  Definition coarse_safety (tp : thread_pool) m sched A :=
+    safeN (coarse_semantics sched A) extSpec the_ge (length sched) z (sched,tp) m.
+
+  Definition fine_safety (tp : thread_pool) m sched A :=
+    safeN (fine_semantics sched A) extSpec the_ge (length sched) z (sched,tp) m.
+  
+  Inductive fat : Type :=
+  | Internal : nat -> fat
+  | External : nat -> fat.
+
+
+  Lemma fatten : forall sched tp m A
+  
+  (* Inductive isFat A : thread_pool -> Mem.mem -> list nat -> list nat -> Prop := *)
+  (* | fnil : forall tp m, fat_sched tp m [] [] *)
+  (* | fconsC : forall i sched fat_sched tp tp' m m' *)
+  (*              isFat tp' m' sched fat_sched -> *)
+  (*              fstep A (i :: sched) tp m sched tp' m' -> *)
+  (*              ~ semantics.at_external the_sem (getThreadC tp *)
+  (*              isFat (i :: sched) ((Internal i) :: sched) *)
 
 (* Move to another file*)
 Module In2.

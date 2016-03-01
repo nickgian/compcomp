@@ -36,21 +36,16 @@ Notation UNLOCK_SIG := (mksignature (AST.Tint::nil) (Some AST.Tint)).
 Notation UNLOCK := (EF_external 8%positive UNLOCK_SIG).
 
 
-
-
-
-
 Notation access_map := (Maps.PMap.t (Z -> option permission)).
 Notation block  := Values.block.
 Notation address:= (block * Z)%type.
 Definition b_ofs2address b ofs : address:=
   (b, Int.intval ofs).
 
-  Inductive ctl {cT:Type} : Type :=
-  | Krun : cT -> ctl
-  | Kstop : cT -> ctl
-  | Kresume : cT -> ctl.
-
+Inductive ctl {cT:Type} : Type :=
+| Krun : cT -> ctl
+| Kstop : cT -> ctl
+| Kresume : cT -> ctl.
 
 Definition EqDec: Type -> Type := 
 fun A : Type => forall a a' : A, {a = a'} + {a <> a'}.

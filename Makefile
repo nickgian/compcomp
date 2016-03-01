@@ -171,7 +171,7 @@ LINKING=cast.v pos.v stack.v collection.v seq_lemmas.v pred_lemmas.v \
   linking_inv.v ret_lemmas.v call_lemmas.v linking_proof.v \
   context.v context_equiv.v \
   jstep.v safe_clight_rc.v clight_nucular.v CompositionalComplements.v \
-  threads_lemmas.v permissions.v compcert_threads.v thread_inv.v threads_simulate.v
+  threads_lemmas.v permissions.v concurrent_machine.v compcert_threads.v thread_inv.v threads_simulate.v
 
 
 # Putting everything together (in driver/)

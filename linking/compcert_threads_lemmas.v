@@ -44,7 +44,19 @@ Notation LOCK := (EF_external 7%positive LOCK_SIG).
 Notation UNLOCK_SIG := (mksignature (AST.Tint::nil) (Some AST.Tint)).
 Notation UNLOCK := (EF_external 8%positive UNLOCK_SIG).
 
-Require Import compcert_linking compcert_threads threads_lemmas permissions.
+Require Import compcert_linking compcert_threads threads_lemmas permissions concurrent_machine.
+
+Ltac pf_cleanup :=
+  repeat match goal with
+           | [H1: invariant ?X, H2: invariant ?X |- _] =>
+             assert (H1 = H2) by (by eapply proof_irr);
+               subst H2
+           | [H1: mem_compatible ?TP ?M, H2: mem_compatible ?TP ?M |- _] =>
+             assert (H1 = H2) by (by eapply proof_irr);
+               subst H2
+           | [H1: is_true (leq ?X ?Y), H2: is_true (leq ?X ?Y) |- _] =>
+            assert (H1 = H2) by (erewrite leq_pf_irr; eauto 2); subst H2
+         end.
 
 Module StepLemmas.
   Section StepLemmas.
@@ -52,12 +64,13 @@ Module StepLemmas.
     Import ThreadPool Concur.
     Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
 
-    Notation thread_pool := (t cT).
+    Notation cT' := (@ctl cT).
+    Notation thread_pool := (t cT').
     Notation perm_map := access_map.
     Notation invariant := (@invariant cT G the_sem).
 
     Variable the_ge : G.
-    Notation fine_step := (@fine_step cT G the_sem the_ge).
+    Notation dry_step := (@dry_step cT G the_sem the_ge).
 
 
     Lemma restrPermMap_wf :
@@ -152,30 +165,30 @@ Module StepLemmas.
     Qed.
         
     Hypothesis corestep_canonical_max :
-      forall c m c' m' n
+      forall c m c' m'
         (Hm_canon: isCanonical (getMaxPerm m))
-        (Hcore: corestepN the_sem the_ge n c m c' m'),
+        (Hcore: corestep the_sem the_ge c m c' m'),
         isCanonical (getMaxPerm m').
-
+    
     Hypothesis corestep_canonical_cur :
-      forall c m c' m' n
+      forall c m c' m'
         (Hm_canon: isCanonical (getCurPerm m))
-        (Hcore: corestepN the_sem the_ge n c m c' m'),
+        (Hcore: corestep the_sem the_ge c m c' m'),
         isCanonical (getCurPerm m').
 
-    Hypothesis corestep_permMap_wf : forall tp tid (Htid: tid < @num_threads cT tp) c m c' m' n
+    Hypothesis corestep_permMap_wf : forall tp tid (Htid: tid < @num_threads cT' tp) c m c' m'
                                        (Hperm: permMap_wf tp (getCurPerm m) tid)
-                                       (Hcore: corestepN the_sem the_ge n c m c' m'),
+                                       (Hcore: corestep the_sem the_ge c m c' m'),
                                        permMap_wf tp (getCurPerm m') tid.
 
     Lemma updThread_invariants :
-      forall (tp tp' : thread_pool) c m m1 c' m1' n tid counter
+      forall (tp tp' : thread_pool) c m m1 c' m1' tid counter
         (Hinv: invariant tp)
         (Hcompatible: mem_compatible tp m)
-        (Hthread: getThreadC tp tid = c)
+        (Hthread: getThreadC tp tid = Krun c)
         (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompatible) tid) = m1)
-        (Hcore: corestepN the_sem the_ge (S n) c m1 c' m1')
-        (Htp': tp' = updThread tp tid c' (getCurPerm m1') counter),
+        (Hcore: corestep the_sem the_ge c m1 c' m1')
+        (Htp': tp' = updThread tp tid (Krun c') (getCurPerm m1') counter),
         invariant tp'.
     Proof.
       intros. destruct Hinv as [Hcanonical Hrace Hlp].
@@ -184,10 +197,9 @@ Module StepLemmas.
       { intros Hcontra. subst tp' tid.
         simpl in *.
         destruct (Hlp pf) as [c0' [Hthread' Hhalted]].
-        rewrite Hthread in Hthread'; subst.
-        destruct Hcore as [? [? [Hcontra _]]].
-        apply corestep_not_halted in Hcontra. rewrite Hthread' in Hcontra.
-        rewrite Hcontra in Hhalted. auto.
+        rewrite Hthread in Hthread'; inversion Hthread'; subst c0'.
+        apply corestep_not_halted in Hcore. 
+        rewrite Hcore in Hhalted. auto.
       }
       split.
       { intros tid'.
@@ -196,7 +208,7 @@ Module StepLemmas.
         - simpl in *.
           pf_cleanup.
           rewrite eq_refl.
-          eapply corestep_canonical_cur with (c := c) (n := S n) (c' := c'); eauto.
+          eapply corestep_canonical_cur with (c := c) (c' := c'); eauto.
           eapply restrPermMap_can; by eauto.
         - simpl in *.
           rewrite if_false.
@@ -214,7 +226,7 @@ Module StepLemmas.
           assert (Hwf := no_race_wf pf Hrace).
           apply restrPermMap_wf in Hrestrict_pmap; auto.
           assert (Hwf': permMap_wf tp (getCurPerm m1') tid).
-          { eapply corestep_permMap_wf with (n := S n); eauto. }
+          { eapply @corestep_permMap_wf; eauto. }
           unfold permMap_wf in Hwf'.
           specialize (Hwf' _ Htid0' Heq0').
           apply permMapsDisjoint_comm. assumption.
@@ -226,7 +238,7 @@ Module StepLemmas.
           assert (Hwf := no_race_wf pf Hrace).
           apply restrPermMap_wf in Hrestrict_pmap; auto.
           assert (Hwf': permMap_wf tp (getCurPerm m1') tid).
-          { eapply corestep_permMap_wf with (n := S n); eauto. }
+          { eapply corestep_permMap_wf; eauto. }
           unfold permMap_wf in Hwf'.
           specialize (Hwf' _ Htid0 Heq0).
           assumption.
@@ -246,9 +258,11 @@ Module StepLemmas.
       }     
     Qed.
 
-    Lemma fine_step_invariants :
-      forall (tp tp' : thread_pool) m m' sched sched'
-        (Hstep: fine_step sched tp m sched' tp' m'),
+    Lemma dry_step_invariants :
+      forall (tp tp' : thread_pool) m m' (tid : nat) (pf : containsThread tp tid)
+        (Hcompatible: mem_compatible tp m)
+        (Hinv: invariant tp)
+        (Hstep: dry_step pf Hcompatible tp' m'),
         invariant tp'.
     Proof.
       intros. inversion Hstep.
@@ -263,27 +277,24 @@ Module StepLemmas.
         \/ (forall k, (Maps.PMap.get b (Mem.mem_access m) ofs k = Some Freeable /\
                  Maps.PMap.get b (Mem.mem_access m') ofs k = None)).
     
-    Lemma fine_step_compatible :
-      forall (tp tp' : thread_pool) m m' sched sched'
-        (Hstep: fine_step sched tp m sched' tp' m'),
+    Lemma dry_step_compatible :
+      forall (tp tp' : thread_pool) m m' (tid : nat) (pf : containsThread tp tid)
+        (Hcompatible: mem_compatible tp m)
+        (Hinv: invariant tp)
+        (Hstep: dry_step pf Hcompatible tp' m'),
         mem_compatible tp' m'.
     Proof.
-          intros; inversion Hstep; subst; clear Hstep.
-      assert (Hcorestep := HcorestepN).
-      unfold corestepN in Hcorestep.
-      destruct Hcorestep as [c2' [m2' [Hcore Heq]]].
-      inversion Heq; subst c2' m2'.
+      intros; inversion Hstep; subst.
       split.
       { unfold perm_compatible, updThread. simpl.
         intros.
         match goal with
           | [ |- context[if ?Expr then _ else _]] =>
             destruct Expr eqn:Htid
-        end.
-          by apply getCur_Max.
-          move/eqP:Htid=>Htid.
-        assert (Hlt := (perm_comp Hcompatible) tid b ofs). unfold getThreadPerm in Hlt.
-        destruct (corestep_access _ _ c' m' b ofs Hcore) as [Hperm | Hperm].
+        end; [apply getCur_Max|].
+        move/eqP:Htid=>Htid.
+        assert (Hlt := (perm_comp Hcompatible) tid0 b ofs). unfold getThreadPerm in Hlt.
+        destruct (corestep_access _ _ c' m' b ofs Hcorestep) as [Hperm | Hperm].
         - specialize (Hperm Max).
           assert (Hlt_max: Mem.perm_order'' (Maps.PMap.get b (getMaxPerm m') ofs)
                                             (Maps.PMap.get b (getMaxPerm m) ofs)).
@@ -300,8 +311,8 @@ Module StepLemmas.
                   by rewrite getMaxPerm_correct).
           destruct (Hperm Cur) as [HCurF HcurNone].
           clear Hperm.
-          assert (Hracy: Maps.PMap.get b (perm_maps tp (Ordinal Htid0_lt_pf)) ofs = Some Freeable).
-          { clear Hcore Hlt HcurNone.
+          assert (Hracy: Maps.PMap.get b (perm_maps tp (Ordinal pf)) ofs = Some Freeable).
+          { clear Hcorestep Hlt HcurNone.
             unfold Maps.PMap.get in *.
             simpl in *.
             rewrite Maps.PTree.gmap in HCurF.
@@ -312,13 +323,12 @@ Module StepLemmas.
             - discriminate.
           }
           assert (Hno_race := no_race Hinv).
-          destruct tid as [tid pf_tid].
+          destruct tid0 as [tid0 pf_tid0].
           assert (Hneq: tid <> tid0)
-            by (intro Hcontra; subst; pf_cleanup; auto).
-          specialize (Hno_race tid tid0 pf_tid Htid0_lt_pf Hneq).
+            by (intro Hcontra; subst; unfold containsThread in *; pf_cleanup; auto).
+          specialize (Hno_race tid tid0 pf pf_tid0 Hneq).
           unfold permMapsDisjoint in Hno_race.
           specialize (Hno_race b ofs).
-          rewrite perm_union_comm in Hno_race.
           apply no_race_racy in Hno_race; auto.
           inversion Hno_race. constructor.
           rewrite Hracy. constructor.
@@ -448,20 +458,29 @@ Section SimDefs.
   
   Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
   
-  Notation thread_pool := (t cT).
+  Notation cT' := (@ctl cT).
+  Notation thread_pool := (t cT').
   Notation perm_map := access_map.
   Notation invariant := (@invariant cT G the_sem).
   
+  Variable the_ge : G.
+  Notation dry_step := (@dry_step cT G the_sem the_ge).
+  
   Variable rename_code : (block -> block) -> cT -> cT.
+  Definition rename_core R (c : cT') :=
+    match c with
+      | Krun c' => Krun (rename_code R c')
+      | Kstop c' => Kstop (rename_code R c')
+      | Kresume c' => Kresume (rename_code R c')
+    end.
 
   Inductive weak_tp_sim (tp tp' : thread_pool) (tid : nat) (R: block -> block) : Prop :=
   | Tp_weak_sim : forall (pf: tid < num_threads tp)
                     (pf': tid < num_threads tp')
                     (Hcounter: counter tp = counter tp')
-                    (Hpool: rename_code R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf'))
+                    (Hpool: rename_core R ((pool tp) (Ordinal pf)) = (pool tp') (Ordinal pf'))
                     (Hinv: invariant tp)
                     (Hinv': invariant tp'),
-                    (* (Hperm: (perm_maps tp) (Ordinal pf) = (perm_maps tp') (Ordinal pf')), *)
                     weak_tp_sim tp tp' tid R.
 
   Inductive tp_sim (tp tp' : thread_pool) (tid : nat) (R: block -> block) : Prop :=
@@ -494,29 +513,34 @@ Section FineStepLemmas.
   Import Concur ThreadPool MemoryObs SimDefs StepLemmas.
 
   Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
-  
-  Notation thread_pool := (t cT).
+
+  Notation cT' := (@ctl cT).
+  Notation thread_pool := (t cT').
   Notation perm_map := access_map.
   Notation invariant := (@invariant cT G the_sem).
-  
+
   Variable the_ge : G.
   Variable rename_code : (block -> block) -> cT -> cT.
-  
+  Notation dry_step := (@dry_step cT G the_sem the_ge).
+  Notation rename_core := (@rename_core cT rename_code).
+  Notation tp_sim := (@tp_sim cT G the_sem rename_code).
+  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
+    
   Hypothesis corestep_canonical_max :
-    forall c m c' m' n
+    forall c m c' m'
       (Hm_canon: isCanonical (getMaxPerm m))
-      (Hcore: corestepN the_sem the_ge n c m c' m'),
+      (Hcore: corestep the_sem the_ge c m c' m'),
       isCanonical (getMaxPerm m').
-
+  
   Hypothesis corestep_canonical_cur :
-    forall c m c' m' n
+    forall c m c' m'
       (Hm_canon: isCanonical (getCurPerm m))
-      (Hcore: corestepN the_sem the_ge n c m c' m'),
+      (Hcore: corestep the_sem the_ge c m c' m'),
       isCanonical (getCurPerm m').
 
-  Hypothesis corestep_permMap_wf : forall tp tid (Htid: tid < @num_threads cT tp) c m c' m' n
+  Hypothesis corestep_permMap_wf : forall tp tid (Htid: tid < @num_threads cT' tp) c m c' m'
                                      (Hperm: permMap_wf tp (getCurPerm m) tid)
-                                     (Hcore: corestepN the_sem the_ge n c m c' m'),
+                                     (Hcore: corestep the_sem the_ge c m c' m'),
                                      permMap_wf tp (getCurPerm m') tid.
 
   Hypothesis corestep_access :
@@ -527,24 +551,11 @@ Section FineStepLemmas.
       \/ (forall k, (Maps.PMap.get b (Mem.mem_access m) ofs k = Some Freeable /\
                Maps.PMap.get b (Mem.mem_access m') ofs k = None)).
 
-  Notation tp_sim := (@tp_sim cT G the_sem rename_code).
-  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
-  Notation fine_step := (@fine_step cT G the_sem the_ge).
 
   Hypothesis rename_code_at_ext :
-    forall R c,
+    forall R (c : cT),
       semantics.at_external the_sem (rename_code R c) = None <->
       semantics.at_external the_sem c = None.
-
-  Ltac pf_irr_clean :=
-    repeat match goal with
-             | [H1: invariant ?X, H2: invariant ?X |- _] =>
-               assert (H1 = H2) by (by eapply proof_irr);
-                 subst H2
-             | [H1: mem_compatible ?TP ?M, H2: mem_compatible ?TP ?M |- _] =>
-               assert (H1 = H2) by (by eapply proof_irr);
-                 subst H2
-           end.
 
   (* Can lift it from a modified readonly hopefully *)
   Hypothesis corestep_unchanged_on :
@@ -629,55 +640,56 @@ Section FineStepLemmas.
          exfalso; ssromega
        end).
 
-  Lemma fine_step_sim_invariant_l :
-    forall sched (tp1 tp1' tp2 : thread_pool) (m1 m2 m1' : mem) (i j : nat)
+  Lemma dry_step_sim_invariant_l :
+    forall (tp1 tp1' tp2 : thread_pool) (m1 m2 m1' : mem) (i j : nat)
+      (pfi : containsThread tp1 i)
       (R: block -> block) (Hneq: i <> j)
-      (Htp_sim: tp_sim tp1 tp1' j R)
+      (Hcompatible1: mem_compatible tp1 m1)
+      (Htp_sim: weak_tp_sim tp1 tp1' j R)
       (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
-      (Hstep: fine_step (i :: sched) tp1 m1 sched tp2 m2)
+      (Hstep: dry_step pfi Hcompatible1 tp2 m2)
       (Hcompatible2: mem_compatible tp2 m2),
-      tp_sim tp2 tp1' j R /\ mem_sim tp2 tp1' m2 m1' j R.
+      weak_tp_sim tp2 tp1' j R /\ mem_sim tp2 tp1' m2 m1' j R.
   Proof with (eauto 3 with mem).
-    intros. inversion Hstep as [tsched tp tp' m m1i c m' c' tid0 pf0].
-    subst tid0 tsched tp' m' m tp.
+    intros. inversion Hstep as [tp' c m1i m' c2 Hrestrict Hthread Hcorestep Htp2].
+    subst tp' m'.
     split.
     { (* Proof of tp_sim *)
-      inversion Htp_sim as [Hweak_sim Hnum_threads]; inversion Hweak_sim.
+      inversion Htp_sim.
       assert (pf2: j < num_threads tp2)
         by (subst; simpl; auto).
-      constructor; [|subst tp2; simpl; auto].
       eapply @Tp_weak_sim with (pf := pf2) (pf' := pf'); simpl; eauto.
       - subst; auto.
       - subst; auto.
       - subst; simpl. rewrite if_false. simpl in pf2. pf_cleanup. eassumption.
         apply/eqP. intros Hcontra; inversion Hcontra; auto.
       - eapply @updThread_invariants with
-        (c := c) (m1 := m1i) (c' := c') (m1' := m2) (tp := tp1); eauto.
+        (c := c) (m1 := m1i) (c' := c2) (m1' := m2) (tp := tp1); eauto.
     }
     { (* Proof of mem_sim *)
       inversion Hmem_sim as [pf1 pf1' Hcomp Hcompatible'].
-      pf_irr_clean.
+      pf_cleanup.
       assert (pf2: j < num_threads tp2)
         by (subst; simpl; auto).
       eapply Mem_sim with (Hcomp := Hcompatible2) (Hcomp' := Hcompatible')
                                                   (pf := pf2) (pf' := pf1')...
-      assert (Hobs': mem_obs_eq id (restrPermMap (permMapsInv_lt (perm_comp Hcompatible) (Ordinal pf1)))
-                                (restrPermMap (permMapsInv_lt (perm_comp Hcompatible2) (Ordinal pf2)))).
-      { simpl in HcorestepN. destruct HcorestepN as [c2t [m2t [? Heq]]].
-        inversion Heq. subst c2t m2t.
-        eapply corestep_disjoint_mem_obs_id
+      assert (Hobs':
+                mem_obs_eq id
+                           (restrPermMap (permMapsInv_lt (perm_comp Hcompatible1) (Ordinal pf1)))
+                           (restrPermMap (permMapsInv_lt (perm_comp Hcompatible2) (Ordinal pf2)))).
+      { eapply corestep_disjoint_mem_obs_id
         with (m1i := m1i) (m2 := m2)
                           (p1j := perm_maps tp1 (Ordinal pf1)).
-        - eapply (mem_canonical Hcompatible).
+        - eapply (mem_canonical Hcompatible1).
         - unfold getThreadPerm. subst tp2. simpl.
           rewrite if_false. pf_cleanup. auto.
           apply/eqP; intro Hcontra; inversion Hcontra; auto.
         - eassumption.
-        - destruct Hinv; auto.
+        - inversion Htp_sim. destruct Hinv; eauto.
         - eassumption.
       } 
       assert (mem_obs_eq R (restrPermMap
-                              (permMapsInv_lt (perm_comp Hcompatible)
+                              (permMapsInv_lt (perm_comp Hcompatible1)
                                               (Ordinal (n:=num_threads tp1) (m:=j) pf1)))
                          (restrPermMap
                             (permMapsInv_lt (perm_comp Hcompatible')
@@ -685,17 +697,18 @@ Section FineStepLemmas.
     }
   Qed.
 
-  Lemma fine_step_sim_invariant_r :
-    forall sched (tp1 tp1' tp2' : thread_pool) (m1 m1' m2' : mem) (i j : nat)
-      (R: block -> block) (Hneq: i <> j)
+  Lemma dry_step_sim_invariant_r :
+    forall (tp1 tp1' tp2' : thread_pool) (m1 m1' m2' : mem) (i j : nat)
+      (R: block -> block) (Hneq: i <> j) (pfi': containsThread tp1' i)
+      (Hcompatible1': mem_compatible tp1' m1')
       (Htp_sim: weak_tp_sim tp1 tp1' j R)
       (Hmem_sim: mem_sim tp1 tp1' m1 m1' j R)
-      (Hstep: fine_step (i :: sched) tp1' m1' sched tp2' m2')
+      (Hstep: dry_step pfi' Hcompatible1' tp2' m2')
       (Hcompatible2: mem_compatible tp2' m2'),
       weak_tp_sim tp1 tp2' j R /\ mem_sim tp1 tp2' m1 m2' j R.
   Proof with (eauto 3 with mem).
-    intros. inversion Hstep as [tsched' tp tp' m m1i' c m' c' tid0 pf0].
-    subst tid0 tsched' tp' m' m tp.
+    intros; inversion Hstep as [tp' c m1i' m' c2' Hrestrict Hthread Hcorestep Htp2].
+    subst tp' m'.
     split.
     { (* Proof of tp_sim *)
       inversion Htp_sim.
@@ -709,32 +722,30 @@ Section FineStepLemmas.
       - eapply @updThread_invariants with (tp := tp1'); eauto.
     }
     { (* Proof of mem_sim *)
-      inversion Hmem_sim as [pf1 pf1' Hcompatible1 Hcompatible1']. pf_irr_clean.
+      inversion Hmem_sim as [pf1 pf1' Hcompatible1 ?]. pf_cleanup.
       assert (pf2': j < num_threads tp2')
         by (subst; simpl; auto).
       remember (restrPermMap (permMapsInv_lt (perm_comp Hcompatible2) (Ordinal pf2')))
         as m2'j eqn:Hrestr2_j;
         symmetry in Hrestr2_j.
       pf_cleanup.
-      destruct HcorestepN as [m2'' [c2'' [? Heq]]].
-      inversion Heq; subst m2'' c2''.
       eapply Mem_sim with (Hcomp := Hcompatible1) (Hcomp' := Hcompatible2)
                                                   (pf := pf1) (pf' := pf2')...
       assert (Hobs_12j: mem_obs_eq id (restrPermMap
-                                         (permMapsInv_lt (perm_comp Hcompatible) (Ordinal pf1')))
+                                         (permMapsInv_lt (perm_comp Hcompatible1') (Ordinal pf1')))
                                    (restrPermMap
                                       (permMapsInv_lt (perm_comp Hcompatible2)
                                                       (Ordinal  pf2')))).
       { subst tp2'. simpl in Hrestr2_j. simpl.
-        pf_irr_clean.
+        pf_cleanup.
         eapply corestep_disjoint_mem_obs_id
         with (m1i := m1i') (m2 := m2')
                           (p1j := perm_maps tp1' (Ordinal pf1')).
-        - apply (mem_canonical Hcompatible).
+        - apply (mem_canonical Hcompatible1').
         - rewrite if_false. pf_cleanup. reflexivity.
           apply/eqP; intro Hcontra; inversion Hcontra; auto.
         - eassumption.
-        - destruct Hinv. auto.
+        - inversion Htp_sim. destruct Hinv'. eauto.
         - eassumption.
       }
       eapply mem_obs_trans...
@@ -753,19 +764,19 @@ Section FineStepLemmas.
     forall (tp tp' : thread_pool) (m m' : mem) (R : block -> block) 
       (i : nat) (pf : i < num_threads tp) (c' : cT)
       (pf' : i < num_threads tp')
-      (Hinv: invariant (updThread tp (Ordinal pf) c' (getCurPerm m) (counter tp)))
-      (Hinv': invariant (updThread tp' (Ordinal pf') (rename_code R c')
+      (Hinv: invariant (updThread tp (Ordinal pf) (Krun c') (getCurPerm m) (counter tp)))
+      (Hinv': invariant (updThread tp' (Ordinal pf') (rename_core R (Krun c'))
                                    (getCurPerm m') (counter tp')))
       (Hcompatible' : mem_compatible (updThread tp'
                                                 (Ordinal pf')
-                                                (rename_code R c') (getCurPerm m') 
+                                                (rename_core R (Krun c')) (getCurPerm m') 
                                                 (counter tp')) m')
-      (pf2 : i < num_threads (updThread tp (Ordinal pf) c'
+      (pf2 : i < num_threads (updThread tp (Ordinal pf) (Krun c')
                                         (getCurPerm m) (counter tp)))
-      (pf2' : i < num_threads (updThread tp' (Ordinal pf') (rename_code R c')
+      (pf2' : i < num_threads (updThread tp' (Ordinal pf') (rename_core R (Krun c'))
                                          (getCurPerm m') (counter tp')))
       (Hcompatible : mem_compatible
-                       (updThread tp (Ordinal pf) c' (getCurPerm m) (counter tp)) m)
+                       (updThread tp (Ordinal pf) (Krun c') (getCurPerm m) (counter tp)) m)
       (Hobs : mem_obs_eq R m m'),
       mem_obs_eq R
                  (restrPermMap (permMapsInv_lt (perm_comp Hcompatible) (Ordinal pf2)))
@@ -801,56 +812,54 @@ Section FineStepLemmas.
     }
   Qed.
 
-  Lemma fine_step_sim_aux :
-    forall fsched fsched' (tp1 tp2 tp1' : thread_pool) (m1 m2 m1' : mem) R (i : nat)
+  Lemma dry_step_sim_aux :
+    forall (tp1 tp2 tp1' : thread_pool) (m1 m2 m1' : mem) R (i : nat)
+      (pfi : containsThread tp1 i)
+      (pfi' : containsThread tp1' i)
+      (Hcompatible1: mem_compatible tp1 m1)
+      (Hcompatible1': mem_compatible tp1' m1')
       (Htp_simi: weak_tp_sim tp1 tp1' i R)
       (Hmem_simi: mem_sim tp1 tp1' m1 m1' i R)
-      (Hstep1: fine_step (i :: fsched) tp1 m1 fsched tp2 m2),
-    exists tp2' m2', fine_step (i :: fsched') tp1' m1' fsched' tp2' m2' /\
+      (Hstep1: dry_step pfi Hcompatible1 tp2 m2),
+    exists tp2' m2', dry_step pfi' Hcompatible1' tp2' m2' /\
                 (forall tid, weak_tp_sim tp1 tp1' tid R -> weak_tp_sim tp2 tp2' tid R) /\
                 (forall tid, mem_sim tp1 tp1' m1 m1' tid R ->
                         mem_sim tp2 tp2' m2 m2' tid R).
   Proof with (eauto 3 with mem).
     intros.
-    assert (Hcompatible2: mem_compatible tp2 m2) by (eapply fine_step_compatible; eauto).
-    inversion Hstep1 as [tsched tp tp' m m1i c m' c' tid0 pf0].
-    subst tid0 tsched tp' m' m tp.
+    assert (Hcompatible2: mem_compatible tp2 m2)
+      by (inversion Htp_simi; eapply dry_step_compatible with (tp := tp1); eauto).
+    inversion Hstep1 as [tp' c m1i m' c2 Hrestrict_pmap Hthread Hcorestep Htp2].
+    subst tp' m'.
     inversion Hmem_simi as [pf_tid0 pf_tid0'
                                     Hmem_comp0 Hcompatible'];
-      pf_irr_clean; pf_cleanup.
-    destruct HcorestepN as [c2 [m2it [Hcore Hrefl]]].
-    unfold corestepN in Hrefl. inversion Hrefl; subst c' m2it.
+      unfold containsThread in *; pf_cleanup.
     rewrite Hrestrict_pmap in Hobs.
-    destruct (corestep_obs_eq _ _ _ Hobs Hcore) as [m2' [Hcore' Hobs']].
-    assert (HcoreN': corestepN the_sem the_ge 1 (rename_code R c)
-                               (restrPermMap
-                                  (permMapsInv_lt (perm_comp Hcompatible')
-                                                  (Ordinal pf_tid0'))) (rename_code R c2) m2')
-      by (unfold corestepN; eexists; eauto).
-    inversion Htp_simi as [Hweak_simi Hnum_threads1]; inversion Hweak_simi.
+    destruct (corestep_obs_eq _ _ _ Hobs Hcorestep) as [m2' [Hcore' Hobs']].
+    inversion Htp_simi.
     unfold getThreadC in Hthread.
     pf_cleanup.
     rewrite Hthread in Hpool.
-    assert (Hget': getThreadC tp1' (Ordinal pf_tid0') = rename_code R c)
+    assert (Hget': getThreadC tp1' (Ordinal pfi') = rename_core R (Krun c))
            by (by unfold getThreadC).
-    remember (updThread tp1' (Ordinal pf_tid0') (rename_code R c2)
+    remember (updThread tp1' (Ordinal pfi') (rename_core R (Krun c2))
                         (getCurPerm m2') (counter tp1')) as tp2' eqn:Htp2'.
     exists tp2'; exists m2'.
-    assert (Hstep': fine_step (i :: fsched') tp1' m1' fsched' tp2' m2')
-      by (eapply step_fine; eauto).
+    assert (Hstep': dry_step pfi' Hcompatible1' tp2' m2')
+      by (eapply step_dry; eauto).
     split; [eassumption |].
     split.
     { (* Proof of tp_sim *)
       intros tid Htp_sim.
       subst tp2' tp2.
-      destruct (tid < num_threads ((updThread tp1 (Ordinal pf0)
-                                              c2 (getCurPerm m2)
+      destruct (tid < num_threads ((updThread tp1 (Ordinal pfi)
+                                              (Krun c2) (getCurPerm m2)
                                               (counter tp1)))) eqn:pf_tid;
         [|inversion Htp_sim;
           simpl in pf_tid; unfold is_true in *; congruence]. 
       destruct (tid < num_threads
-                        ((updThread tp1' (Ordinal (n:=num_threads tp1') pf_tid0')
-                                    (rename_code R c2) (getCurPerm m2') 
+                        ((updThread tp1' (Ordinal (n:=num_threads tp1') pfi')
+                                    (rename_core R (Krun c2)) (getCurPerm m2') 
                                     (counter tp1')))) eqn:pf_tid';
         [|inversion Htp_sim;
            simpl in pf_tid'; unfold is_true in *; congruence].
@@ -875,9 +884,7 @@ Section FineStepLemmas.
         match goal with
           | [|- invariant ?Expr] => remember Expr as tp2
         end.
-        eapply @updThread_invariants with (tp := tp1) (n0:=0) (tp' := tp2); eauto.
-        unfold corestepN.
-        exists c2 m2. auto.
+        eapply @updThread_invariants with (tp := tp1) (tp' := tp2); eauto.
         match goal with
           | [|- invariant ?Expr] => remember Expr as tp2'
         end.
@@ -886,52 +893,53 @@ Section FineStepLemmas.
     { (* Proof of mem_sim *)
       intros tid Hmem_sim. subst tp2'.
       inversion Hmem_sim as [pf_tid pf_tid' Hcomp2 Hcomp2' Hobs_tid].
-      assert (pf2_tid: tid < num_threads ((updThread tp1 (Ordinal pf0)
-                                                     c2 (getCurPerm m2) (counter tp1))))
+      assert (pf2_tid: tid < num_threads ((updThread tp1 (Ordinal pfi)
+                                                     (Krun c2) (getCurPerm m2) (counter tp1))))
         by (simpl in *; assumption).
       assert (pf2_tid':
                 tid < num_threads
-                        (updThread tp1' (Ordinal pf_tid0')
-                                   (rename_code R c2) (getCurPerm m2') 
+                        (updThread tp1' (Ordinal pfi')
+                                   (rename_core R (Krun c2)) (getCurPerm m2') 
                                    (counter tp1')))
-        by (simpl in *; assumption). pf_irr_clean.
+        by (simpl in *; assumption).
       destruct (tid == i) eqn:Htid_eq; move/eqP:Htid_eq=>Htid_eq.
       + subst tid. subst tp2.
-        apply fine_step_compatible in Hstep'; eauto.
+        apply dry_step_compatible in Hstep'; eauto.
         eapply Mem_sim with (pf := pf2_tid) (pf' := pf2_tid') (Hcomp := Hcompatible2)
-                                            (Hcomp' := Hstep'); simpl.
+                                            (Hcomp' := Hstep'); simpl;
+        pf_cleanup.
         eapply mem_obs_eq_restr; eauto.
-        eapply fine_step_invariants; eauto.
+        eapply dry_step_invariants with (tp := tp1); eauto.
         eapply updThread_invariants; eauto.
       + subst tp2.
         assert (Hobs_eq2: mem_obs_eq id
-                                     (restrPermMap (permMapsInv_lt (perm_comp Hcompatible)
+                                     (restrPermMap (permMapsInv_lt (perm_comp Hcompatible1)
                                                                    (Ordinal pf_tid)))
                                      (restrPermMap (permMapsInv_lt (perm_comp Hcompatible2)
                                                                    (Ordinal pf2_tid)))).
         { simpl. eapply corestep_disjoint_mem_obs_id; eauto.
-          - apply (mem_canonical Hcompatible).
+          - apply (mem_canonical Hcompatible1).
           - rewrite if_false. unfold getThreadPerm. by pf_cleanup.
             apply/eqP; intro Hcontra; inversion Hcontra; auto.
           - apply (no_race Hinv); auto.
         }
-        apply fine_step_compatible in Hstep'; eauto.
+        apply dry_step_compatible in Hstep'; eauto.
         assert (Hobs_eq2': mem_obs_eq id
-                                     (restrPermMap (permMapsInv_lt (perm_comp Hcompatible')
+                                     (restrPermMap (permMapsInv_lt (perm_comp Hcompatible1')
                                                                    (Ordinal pf_tid')))
                                      (restrPermMap (permMapsInv_lt (perm_comp Hstep')
                                                                    (Ordinal pf2_tid')))).
         { simpl. eapply corestep_disjoint_mem_obs_id; eauto.
-          - apply (mem_canonical Hcompatible').
+          - apply (mem_canonical Hcompatible1').
           - rewrite if_false. unfold getThreadPerm. by pf_cleanup.
             apply/eqP; intro Hcontra; inversion Hcontra; auto.
           - apply (no_race Hinv'); auto.
         }
         assert (Hobs_trans : mem_obs_eq R (restrPermMap (permMapsInv_lt (perm_comp Hcompatible2)
                                                                         (Ordinal pf2_tid)))
-                                        (restrPermMap (permMapsInv_lt (perm_comp Hcompatible')
+                                        (restrPermMap (permMapsInv_lt (perm_comp Hcompatible1')
                                                                       (Ordinal pf_tid'))))
-          by (simpl; eapply mem_obs_trans_comm; eauto).
+          by (pf_cleanup; simpl; eapply mem_obs_trans_comm; eauto).
         eapply Mem_sim with (pf := pf2_tid) (pf' := pf2_tid') (Hcomp := Hcompatible2)
                                             (Hcomp' := Hstep').
         eapply mem_obs_trans; eauto.

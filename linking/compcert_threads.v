@@ -442,7 +442,7 @@ Module Concur.
     (*missing lock-ranges*)
     Inductive ext_step {tid0 tp m}
               (cnt0:containsThread tp tid0)(Hcompat:mem_compatible tp m):
-      thread_pool -> mem -> bool -> Prop :=
+      thread_pool -> mem -> Prop :=
     | step_lock :
         forall (tp':thread_pool) m1 c c' m' b ofs
           (cnt_lp: containsThread tp lp_id),
@@ -461,7 +461,7 @@ Module Concur.
             (* (Hangel_wf: permMap_wf tp (aggelos n) tid0) *)
             (* (Hangel_canonical: isCanonical (aggelos n)) *)
             (Htp': tp' = updThread tp tid (Kresume c') (aggelos n) (n+1)),
-            ext_step cnt0 Hcompat tp' m' true 
+            ext_step cnt0 Hcompat tp' m' 
                      
     | step_unlock :
         forall  (tp':thread_pool) m1 c c' m' b ofs
@@ -481,7 +481,7 @@ Module Concur.
             (* (Hangel_wf: permMap_wf tp (aggelos n) tid0) *)
             (* (Hangel_canonical: isCanonical (aggelos n)) *)
             (Htp': tp' = updThread tp tid (Kresume c') (aggelos n) (n+1)),
-            ext_step cnt0 Hcompat tp' m' true 
+            ext_step cnt0 Hcompat tp' m' 
                      
     | step_create :
         forall  (tp_upd tp':thread_pool) c c' c_new vf arg,
@@ -501,7 +501,7 @@ Module Concur.
             (* (Hangel_canonical2: isCanonical (aggelos (n.+1))) *)
             (* NOTE: Something to be done with the new thread!!! *)
             (Htp': tp' = addThread tp_upd (Kresume c_new) (aggelos n.+1)),
-            ext_step cnt0 Hcompat tp' m true
+            ext_step cnt0 Hcompat tp' m
                      
     | step_mklock :
         forall  (tp' tp'': thread_pool) m1 c c' m' b ofs pmap_tid' pmap_lp
@@ -516,15 +516,18 @@ Module Concur.
             (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (MKLOCK, ef_sig MKLOCK, Vptr b ofs::nil))
-            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompat) tid) = m1)
+            (Hrestrict_pmap: restrPermMap
+                               (permMapsInv_lt (perm_comp Hcompat) tid) = m1)
             (Hstore: Mem.store Mint32 m1 b (Int.intval ofs) (Vint Int.zero) = Some m')
             (Hdrop_perm:
                setPerm (Some Nonempty) b (Int.intval ofs) pmap_tid = pmap_tid')
-            (Hlp_perm: setPerm (Some Writable) b (Int.intval ofs) (getThreadPerm tp lp) = pmap_lp)
-            (Hat_external: semantics.after_external the_sem (Some (Vint Int.zero)) c = Some c')
+            (Hlp_perm: setPerm (Some Writable)
+                               b (Int.intval ofs) (getThreadPerm tp lp) = pmap_lp)
+            (Hat_external: semantics.after_external
+                             the_sem (Some (Vint Int.zero)) c = Some c')
             (Htp': tp' = updThread tp tid (Kresume c') pmap_tid' (n+1))
             (Htp'': tp'' = updThreadP tp' lp' pmap_lp),
-            ext_step cnt0 Hcompat tp'' m' true 
+            ext_step cnt0 Hcompat tp'' m' 
                      
     | step_freelock :
         forall  (tp' tp'': thread_pool) c c' b ofs pmap_lp'
@@ -547,7 +550,7 @@ Module Concur.
             (* (Hangel_canonical: isCanonical (aggelos n)) *)
             (Htp': tp' = updThread tp tid (Kresume c') (aggelos n) (n+1))       
             (Htp'': tp'' = updThreadP tp' lp' pmap_lp'),
-            ext_step cnt0 Hcompat  tp'' m true 
+            ext_step cnt0 Hcompat  tp'' m 
                      
     | step_lockfail :
         forall  c b ofs m1
@@ -559,9 +562,10 @@ Module Concur.
             (Hthread: getThreadC tp tid = Kstop c)
             (Hat_external: semantics.at_external the_sem c =
                            Some (LOCK, ef_sig LOCK, Vptr b ofs::nil))
-            (Hrestrict_pmap: restrPermMap (permMapsInv_lt (perm_comp Hcompat) lp) = m1)
+            (Hrestrict_pmap: restrPermMap
+                               (permMapsInv_lt (perm_comp Hcompat) lp) = m1)
             (Hload: Mem.load Mint32 m1 b (Int.intval ofs) = Some (Vint Int.zero)),
-            ext_step cnt0 Hcompat tp m false.
+            ext_step cnt0 Hcompat tp m.
   End Concur.
 
   Module Type DrySemantics.
@@ -630,7 +634,7 @@ Module Concur.
     Definition conc_call (genv:G):
       forall {tid0 ms m},
         (nat -> access_map) -> containsThread ms tid0 -> mem_compatible ms m ->
-        machine_state -> mem -> bool -> Prop:=
+        machine_state -> mem -> Prop:=
       fun tid ms m aggelos => @ext_step cT G Sem genv aggelos lp_id tid ms m.
     
     Inductive threadHalted': forall {tid0 ms},

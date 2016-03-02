@@ -946,18 +946,22 @@ Section FineStepLemmas.
     }
   Qed.
         
-  Lemma fine_step_sim :
-    forall fsched fsched' (tp1 tp2 tp3 tp1' : thread_pool) (m1 m2 m3 m1' : mem) R
+  Lemma dry_step_sim :
+    forall (tp1 tp2 tp3 tp1' : thread_pool) (m1 m2 m3 m1' : mem) R
+      (Hinvariant: invariant tp1)
       (Hinvariant': invariant tp1')
-      (Hcompatible': invariant tp1')
+      (Hcompatible: mem_compatible tp1 m1)
+      (Hcompatible': mem_compatible tp1' m1')
+      (Hcompatible2: mem_compatible tp2 m2)
       (Hsim: forall tid, tid < num_threads tp1 -> tp_sim tp1 tp1' tid R /\
                                             mem_sim tp1 tp1' m1 m1' tid R)
-      (i j : nat) (Hneq: i <> j) 
-      (Hstep1: fine_step (i :: j :: fsched) tp1 m1 (j :: fsched) tp2 m2)
-      (Hstep2: fine_step (j :: fsched) tp2 m2 fsched tp3 m3),
-    exists tp2' m2' tp3' m3',
-      fine_step (j :: i :: fsched') tp1' m1' (i :: fsched') tp2' m2' /\
-      fine_step (i :: fsched') tp2' m2' fsched' tp3' m3' /\
+      (i j : nat) (Hneq: i <> j) (pfi : containsThread tp1 i) (pfj : containsThread tp2 j)
+      (Hstep1: dry_step pfi Hcompatible tp2 m2)
+      (Hstep2: dry_step pfj Hcompatible2 tp3 m3),
+    exists tp2' m2' tp3' m3' (pfj' : containsThread tp1' j)
+      (pfi': containsThread tp2' i) (Hcompatible2': mem_compatible tp2' m2'),
+      dry_step pfj' Hcompatible' tp2' m2' /\
+      dry_step pfi' Hcompatible2' tp3' m3' /\
       (forall tid, tid < num_threads tp3 -> tp_sim tp3 tp3' tid R /\
                                       mem_sim tp3 tp3' m3 m3' tid R).
   Proof. Admitted.
@@ -1085,32 +1089,37 @@ Section ExtStepLemmas.
 
   Import Concur ThreadPool MemoryObs SimDefs StepLemmas.
   Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
-  
-  Notation thread_pool := (t cT).
+ 
+  Notation cT' := (@ctl cT).
+  Notation thread_pool := (t cT').
   Notation perm_map := access_map.
   Notation invariant := (@invariant cT G the_sem).
   
-  Variable aggelos : nat -> perm_map.
   Variable the_ge : G.
+  Notation dry_step := (@dry_step cT G the_sem the_ge).
+  
   Variable rename_code : (block -> block) -> cT -> cT.
 
   Notation tp_sim := (@tp_sim cT G the_sem rename_code).
   Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
-  Notation fine_step := (@fine_step cT G the_sem the_ge).
+
+  Variable aggelos : nat -> perm_map.
   Notation ext_step := (@ext_step cT G the_sem the_ge aggelos).
-  
+   
   Lemma ext_step_sim :
-    forall fsched fsched' (tp1 tp2 tp3 tp1' : thread_pool) (m1 m2 m3 m1' : mem) R
-      (Hinvariant': invariant tp1')
-      (Hcompatible': invariant tp1')
-      (Hsim: forall tid, tid < num_threads tp1 -> tp_sim tp1 tp1' tid R /\
-                                            mem_sim tp1 tp1' m1 m1' tid R)
-      (i j : nat) (Hneq: i <> j)
-      (Hstep1: ext_step (i :: j :: fsched) tp1 m1 (j :: fsched) tp2 m2)
-      (Hstep2: fine_step (j :: fsched) tp2 m2 fsched tp3 m3),
-    exists tp2' m2' tp3' m3',
-      fine_step (j :: i :: fsched') tp1' m1' (i :: fsched') tp2' m2' /\
-      ext_step (i :: fsched') tp2' m2' fsched' tp3' m3' /\
+    forall (tp1 tp2 tp3 tp1' : thread_pool) (m1 m2 m3 m1' : mem) R
+      (Hcompatible: mem_compatible m1 tp1)
+      (Hcompatible': mem_compatible m1' tp1')
+      (Hsim: forall tid, containsThread tp1 tid -> tp_sim tp1 tp1' tid R /\
+                                             mem_sim tp1 tp1' m1 m1' tid R)
+      (i j : nat) (Hneq: i <> j) (pfi : containsThread tp1 i)
+      (pfj: containsThread tp2 j) (Hcompatible2: mem_compatible tp2 m2)
+      (Hstep1: ext_step pfi Hcompatible tp2 m2)
+      (Hstep2: dry_step pfj Hcompatible2 tp3 m3),
+    exists tp2' m2' tp3' m3' (pfj': containsThread tp1' j) (pfi': containsThread tp2' i)
+      (Hcompatible2': mem_compatible m2' tp2'),
+      dry_step pfj' Hcompatible' tp2' m2' /\
+      ext_step pfi' Hcompatible2' tp3' m3' /\
       (forall tid, tid < num_threads tp3 -> tp_sim tp3 tp3' tid R /\
                                       mem_sim tp3 tp3' m3 m3' tid R).
   Proof. Admitted.

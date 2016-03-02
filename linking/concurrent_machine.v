@@ -81,7 +81,7 @@ Module Type ConcurrentMachineSig (TID: ThreadID).
                               containsThread ms tid0 -> machine_state -> Prop.
   Parameter conc_call: G ->  forall {tid0 ms m},
                               (nat -> access_map) -> (*ANGEL! *)
-                              containsThread ms tid0 -> mem_compatible ms m -> machine_state -> mem -> bool -> Prop.
+                              containsThread ms tid0 -> mem_compatible ms m -> machine_state -> mem -> Prop.
   
   Parameter threadHalted: forall {tid0 ms},
                             containsThread ms tid0 -> Prop.
@@ -122,14 +122,12 @@ Module CoarseMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineS
         suspend_thread Htid ms' ->
         machine_step U ms m U' ms' m
   | conc_step:
-      forall tid U U' ms ms' m m' success
+      forall tid U U' ms ms' m m'
         (HschedN: schedPeek U = Some tid)
+        (HschedS: schedSkip U = U')        (*Schedule Forward*)
         (Htid: containsThread ms tid)
         (Hcmpt: mem_compatible ms m)
-        (Hconc: conc_call genv aggelos Htid Hcmpt ms' m' success)
-        (HschedS: if success then
-                    schedSkip U = U'       (*Schedule Forward, conditional*)    
-                  else U  = U'),
+        (Hconc: conc_call genv aggelos Htid Hcmpt ms' m'),
         machine_step U ms m U' ms' m'           
   | step_halted:
       forall tid U U' ms m
@@ -212,12 +210,12 @@ Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig
         suspend_thread Htid ms' ->
         machine_step U ms m U' ms' m
   | conc_step:
-      forall tid U U' ms ms' m m' success
+      forall tid U U' ms ms' m m'
         (HschedN: schedPeek U = Some tid)
+        (HschedS: schedSkip U = U')        (*Schedule Forward*)
         (Htid: containsThread ms tid)
         (Hcmpt: mem_compatible ms m)
-        (Hconc: conc_call genv aggelos Htid Hcmpt ms' m' success)
-        (HschedS: schedSkip U = U')        (*Schedule Forward*),
+        (Hconc: conc_call genv aggelos Htid Hcmpt ms' m'),
         machine_step U ms m U' ms' m'           
   | step_halted:
       forall tid U U' ms m

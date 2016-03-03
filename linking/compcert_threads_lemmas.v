@@ -752,6 +752,7 @@ Section FineStepLemmas.
     } 
    Qed.
 
+  (* I am very skeptical about this*)
   Hypothesis corestep_obs_eq :
     forall c1 c2 m1 m1' m2 R
       (Hsim: mem_obs_eq R m1 m1')
@@ -1103,13 +1104,14 @@ Section ExtStepLemmas.
   Notation tp_sim := (@tp_sim cT G the_sem rename_code).
   Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
 
+  Variable lp_id : nat.
   Variable aggelos : nat -> perm_map.
-  Notation ext_step := (@ext_step cT G the_sem the_ge aggelos).
+  Notation ext_step := (@ext_step cT G the_sem the_ge aggelos lp_id).
    
   Lemma ext_step_sim :
     forall (tp1 tp2 tp3 tp1' : thread_pool) (m1 m2 m3 m1' : mem) R
-      (Hcompatible: mem_compatible m1 tp1)
-      (Hcompatible': mem_compatible m1' tp1')
+      (Hcompatible: mem_compatible tp1 m1)
+      (Hcompatible': mem_compatible tp1' m1')
       (Hsim: forall tid, containsThread tp1 tid -> tp_sim tp1 tp1' tid R /\
                                              mem_sim tp1 tp1' m1 m1' tid R)
       (i j : nat) (Hneq: i <> j) (pfi : containsThread tp1 i)
@@ -1117,11 +1119,11 @@ Section ExtStepLemmas.
       (Hstep1: ext_step pfi Hcompatible tp2 m2)
       (Hstep2: dry_step pfj Hcompatible2 tp3 m3),
     exists tp2' m2' tp3' m3' (pfj': containsThread tp1' j) (pfi': containsThread tp2' i)
-      (Hcompatible2': mem_compatible m2' tp2'),
+      (Hcompatible2': mem_compatible tp2' m2'),
       dry_step pfj' Hcompatible' tp2' m2' /\
       ext_step pfi' Hcompatible2' tp3' m3' /\
-      (forall tid, tid < num_threads tp3 -> tp_sim tp3 tp3' tid R /\
-                                      mem_sim tp3 tp3' m3 m3' tid R).
+      (forall tid, containsThread tp3 tid -> tp_sim tp3 tp3' tid R /\
+                                       mem_sim tp3 tp3' m3 m3' tid R).
   Proof. Admitted.
 
 End ExtStepLemmas.

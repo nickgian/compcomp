@@ -228,7 +228,8 @@ Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig
   | schedfail :
       forall tid U U' ms m
         (HschedN: schedPeek U = Some tid)
-        (HschedS: schedSkip U = U'),        (*Schedule Forward*)
+        (HschedS: schedSkip U = U')        (*Schedule Forward*)
+        (Htid: ~ containsThread ms tid),
         machine_step U ms m U' ms m.
 
   Definition MachState: Type := (Sch * machine_state)%type.

@@ -413,18 +413,18 @@ Module Concur.
     Variable the_ge : G.
     Variable aggelos : nat -> perm_map.
     Variable lp_id : nat.
+
+    Definition cont2ord {ms tid0} (cnt: containsThread ms tid0) :=
+      Ordinal cnt.
     
     Record invariant tp :=
       { canonical : forall tid, isCanonical (perm_maps tp tid);
         no_race : race_free tp;
-        lock_pool : forall (pf : 0 < num_threads tp), exists c,
-                      getThreadC tp (Ordinal pf) = Krun c /\ halted the_sem c
+        lock_pool : forall (pf : containsThread tp lp_id), exists c,
+                      getThreadC tp (cont2ord pf) = Krun c /\ halted the_sem c
       }.
     
     (* Semantics of the coarse-grained concurrent machine*)
-    Definition cont2ord {ms tid0} (cnt: containsThread ms tid0) :=
-      Ordinal cnt.
-
     
     Inductive dry_step {tid0 tp m} (cnt: containsThread tp tid0)
       (Hcompatible: mem_compatible tp m) : thread_pool -> mem  -> Prop :=

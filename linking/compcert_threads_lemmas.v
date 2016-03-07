@@ -63,11 +63,12 @@ Module StepLemmas.
 
     Import ThreadPool Concur.
     Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
-
+    Variable lp_id : nat.
+    
     Notation cT' := (@ctl cT).
     Notation thread_pool := (t cT').
     Notation perm_map := access_map.
-    Notation invariant := (@invariant cT G the_sem).
+    Notation invariant := (@invariant cT G the_sem lp_id).
 
     Variable the_ge : G.
     Notation dry_step := (@dry_step cT G the_sem the_ge).
@@ -193,7 +194,7 @@ Module StepLemmas.
     Proof.
       intros. destruct Hinv as [Hcanonical Hrace Hlp].
       destruct tid as [tid pf].
-      assert (Hcontra: tid <> 0).
+      assert (Hcontra: tid <> lp_id).
       { intros Hcontra. subst tp' tid.
         simpl in *.
         destruct (Hlp pf) as [c0' [Hthread' Hhalted]].
@@ -457,11 +458,12 @@ Section SimDefs.
   Import MemoryObs.
   
   Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
-  
+
+  Variable lp_id : nat.
   Notation cT' := (@ctl cT).
   Notation thread_pool := (t cT').
   Notation perm_map := access_map.
-  Notation invariant := (@invariant cT G the_sem).
+  Notation invariant := (@invariant cT G the_sem lp_id).
   
   Variable the_ge : G.
   Notation dry_step := (@dry_step cT G the_sem the_ge).
@@ -502,8 +504,8 @@ Section SimDefs.
                 mem_sim tp tp' m m' tid R.
 End SimDefs.
 
-Arguments weak_tp_sim {cT G the_sem} {rename_code} tp tp' tid R.
-Arguments tp_sim {cT G the_sem} {rename_code} tp tp' tid R.
+Arguments weak_tp_sim {cT G the_sem lp_id} {rename_code} tp tp' tid R.
+Arguments tp_sim {cT G the_sem lp_id} {rename_code} tp tp' tid R.
 Arguments mem_sim {cT} tp tp' m m' tid R.
 End SimDefs.
 
@@ -514,17 +516,18 @@ Section FineStepLemmas.
 
   Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
 
+  Variable lp_id : nat.
   Notation cT' := (@ctl cT).
   Notation thread_pool := (t cT').
   Notation perm_map := access_map.
-  Notation invariant := (@invariant cT G the_sem).
+  Notation invariant := (@invariant cT G the_sem lp_id).
 
   Variable the_ge : G.
   Variable rename_code : (block -> block) -> cT -> cT.
   Notation dry_step := (@dry_step cT G the_sem the_ge).
   Notation rename_core := (@rename_core cT rename_code).
-  Notation tp_sim := (@tp_sim cT G the_sem rename_code).
-  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
+  Notation tp_sim := (@tp_sim cT G the_sem lp_id rename_code).
+  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem lp_id rename_code).
     
   Hypothesis corestep_canonical_max :
     forall c m c' m'
@@ -905,7 +908,7 @@ Section FineStepLemmas.
         by (simpl in *; assumption).
       destruct (tid == i) eqn:Htid_eq; move/eqP:Htid_eq=>Htid_eq.
       + subst tid. subst tp2.
-        apply dry_step_compatible in Hstep'; eauto.
+        apply @dry_step_compatible with (lp_id := lp_id) in Hstep'; eauto.
         eapply Mem_sim with (pf := pf2_tid) (pf' := pf2_tid') (Hcomp := Hcompatible2)
                                             (Hcomp' := Hstep'); simpl;
         pf_cleanup.
@@ -924,7 +927,7 @@ Section FineStepLemmas.
             apply/eqP; intro Hcontra; inversion Hcontra; auto.
           - apply (no_race Hinv); auto.
         }
-        apply dry_step_compatible in Hstep'; eauto.
+        apply @dry_step_compatible with (lp_id := lp_id) in Hstep'; eauto.
         assert (Hobs_eq2': mem_obs_eq id
                                      (restrPermMap (permMapsInv_lt (perm_comp Hcompatible1')
                                                                    (Ordinal pf_tid')))
@@ -1090,21 +1093,21 @@ Section ExtStepLemmas.
 
   Import Concur ThreadPool MemoryObs SimDefs StepLemmas.
   Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
- 
+  
+ Variable lp_id : nat.
   Notation cT' := (@ctl cT).
   Notation thread_pool := (t cT').
   Notation perm_map := access_map.
-  Notation invariant := (@invariant cT G the_sem).
+  Notation invariant := (@invariant cT G the_sem lp_id).
   
   Variable the_ge : G.
   Notation dry_step := (@dry_step cT G the_sem the_ge).
   
   Variable rename_code : (block -> block) -> cT -> cT.
 
-  Notation tp_sim := (@tp_sim cT G the_sem rename_code).
-  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem rename_code).
+  Notation tp_sim := (@tp_sim cT G the_sem lp_id rename_code).
+  Notation weak_tp_sim := (@weak_tp_sim cT G the_sem lp_id rename_code).
 
-  Variable lp_id : nat.
   Variable aggelos : nat -> perm_map.
   Notation ext_step := (@ext_step cT G the_sem the_ge aggelos lp_id).
    
@@ -1128,39 +1131,74 @@ Section ExtStepLemmas.
 
 End ExtStepLemmas.
 End ExtStepLemmas.
-    
+
+
 Module FineSafety.
 Section FineSafety.
 
   Import Concur ThreadPool MemoryObs SimDefs StepLemmas.
 
-  Context {cT G : Type} {the_sem : CoreSemantics G cT Mem.mem}.
-  
-  Notation thread_pool := (t cT).
+  Variable lp_id : nat.
+  Notation cT := (mySem.cT).
+  Notation cT' := mySem.cT'.
+  Notation thread_pool := (t cT').
   Notation perm_map := access_map.
-  Notation invariant := (@invariant cT G the_sem).
+  Notation invariant := (@invariant cT mySem.G mySem.Sem lp_id).
+  Notation mstate := myFineSemantics.MachState.
   
-  Variable the_ge : G.
+  Variable the_ge : mySem.G.
   Variable rename_code : (block -> block) -> cT -> cT.
 
   Context {Z : Type}.
   (* Discuss how to instantiate these*)
   Variable extSpec : external_specification Mem.mem external_function Z.
-  Variable compute_init_perm : G -> perm_map.
   Variable lp_code : cT.
   Variable z : Z.
 
-  Notation coarse_semantics := (@coarse_semantics cT G the_sem compute_init_perm lp_code).
-  Notation fine_semantics := (@fine_semantics cT G the_sem compute_init_perm lp_code).
   Notation fstep := (corestep fine_semantics).
 
   Variable init_memory : thread_pool -> Mem.mem.
 
   Definition coarse_safety (tp : thread_pool) m sched A :=
-    safeN (coarse_semantics sched A) extSpec the_ge (length sched) z (sched,tp) m.
+    safeN (coarse_semantics A sched) extSpec the_ge (length sched) z (sched,tp) m.
 
   Definition fine_safety (tp : thread_pool) m sched A :=
-    safeN (fine_semantics sched A) extSpec the_ge (length sched) z (sched,tp) m.
+    safeN (fine_semantics A sched) extSpec the_ge (length sched) z (sched,tp) m.
+
+  Definition trace := list (nat * thread_pool).
+
+  Definition is_concurrent_step (st : nat * thread_pool) : bool :=
+    let pf := st.1 < num_threads st.2 in
+    match pf as pf0 return pf = pf0 -> bool with
+      | true => fun (Heq : pf = true) =>
+                 match getThreadC st.2 (Ordinal (m := st.1) Heq) with
+                   | Kstop c => match semantics.at_external mySem.Sem c with
+                                 | Some _ => true
+                                 | None => false
+                               end
+                   | _ => false
+                 end
+      | false => fun _ => false
+    end (Logic.eq_refl pf). 
+ 
+
+  Fixpoint filter_trace (tid_last : nat) (tr : trace) :=
+    match tr with
+      | nil => nil
+      | st :: tr =>
+        if is_concurrent_step st then
+          st :: (filter_trace tid_last tr)
+        else
+          if (st.1 == tid_last) ||
+               (List.existsb (fun st' =>
+                                (st'.1 == st.1) && is_concurrent_step st')) tr then
+            st :: (filter_trace tid_last tr)
+          else
+            filter_trace tid_last tr
+    end.
+
+  Definition 
+              
   
   Inductive fat : Type :=
   | Internal : nat -> fat

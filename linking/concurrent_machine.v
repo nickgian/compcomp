@@ -97,8 +97,8 @@ Module CoarseMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineS
   Import SCH.
   
   Notation Sch:=schedule.
-  Variable aggelos: nat -> access_map.
-  Inductive machine_step {genv:G}: Sch -> machine_state -> mem -> Sch -> machine_state -> mem -> Prop :=
+  Inductive machine_step {aggelos: nat -> access_map} {genv:G}:
+    Sch -> machine_state -> mem -> Sch -> machine_state -> mem -> Prop :=
   | resume_step:
       forall tid U ms ms' m
         (HschedN: schedPeek U = Some tid)
@@ -144,14 +144,17 @@ Module CoarseMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineS
         machine_step U ms m U' ms m.
 
   Definition MachState: Type := (Sch * machine_state)%type.
-  Definition MachStep G (c:MachState) (m:mem)  (c' :MachState) (m':mem) :=
-    @machine_step G (fst c) (snd c) m (fst c') (snd c) m'.
+  Section MachineSemantics.
+    Variable aggelos : nat -> access_map.
+    
+    Definition MachStep G (c:MachState) (m:mem) (c' :MachState) (m':mem) :=
+      @machine_step aggelos G (fst c) (snd c) m (fst c') (snd c) m'.
 
-  Definition at_external (st : MachState)
-  : option (external_function * signature * list val) := None.
+    Definition at_external (st : MachState)
+    : option (external_function * signature * list val) := None.
   
-  Definition after_external (ov : option val) (st : MachState) :
-    option (MachState) := None.
+    Definition after_external (ov : option val) (st : MachState) :
+      option (MachState) := None.
 
   (*not clear what the value of halted should be*)
   Definition halted (st : MachState) : option val := None.
@@ -173,8 +176,9 @@ Module CoarseMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineS
         );
     unfold at_external, halted; try reflexivity.
   auto.
-  Defined.
-
+    Defined.
+  End MachineSemantics.
+    
 End CoarseMachine.
 
 Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig TID).
@@ -183,8 +187,8 @@ Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig
   Import SCH.
   
   Notation Sch:=schedule.
-  Variable aggelos: nat -> access_map.
-  Inductive machine_step {genv:G}: Sch -> machine_state -> mem -> Sch -> machine_state -> mem -> Prop :=
+  Inductive machine_step {aggelos : nat -> access_map} {genv:G}:
+    Sch -> machine_state -> mem -> Sch -> machine_state -> mem -> Prop :=
   | resume_step:
       forall tid U U' ms ms' m
         (HschedN: schedPeek U = Some tid)
@@ -233,35 +237,39 @@ Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig
         machine_step U ms m U' ms m.
 
   Definition MachState: Type := (Sch * machine_state)%type.
-  Definition MachStep G (c:MachState) (m:mem)  (c' :MachState) (m':mem) :=
-    @machine_step G (fst c) (snd c) m (fst c') (snd c) m'.
+  Section MachineSemantics.
+    Variable aggelos : nat -> access_map.
+    
+    Definition MachStep G (c:MachState) (m:mem)  (c' :MachState) (m':mem) :=
+      @machine_step aggelos G (fst c) (snd c) m (fst c') (snd c) m'.
 
-  Definition at_external (st : MachState)
-  : option (external_function * signature * list val) := None.
-  
-  Definition after_external (ov : option val) (st : MachState) :
-    option (MachState) := None.
-
+    Definition at_external (st : MachState)
+    : option (external_function * signature * list val) := None.
+    
+    Definition after_external (ov : option val) (st : MachState) :
+      option (MachState) := None.
+    
   (*not clear what the value of halted should be*)
-  Definition halted (st : MachState) : option val := None.
-
-  Variable U: Sch.
-  Definition init_machine the_ge (f : val) (args : list val) : option MachState :=
-    match init_core the_ge f args with
-      |None => None
+    Definition halted (st : MachState) : option val := None.
+    
+    Variable U: Sch.
+    Definition init_machine the_ge (f : val) (args : list val) : option MachState :=
+      match init_core the_ge f args with
+      | None => None
       | Some c => Some (U, c)
-    end.
-  
-  Program Definition MachineSemantics: CoreSemantics G MachState mem.
-  apply (@Build_CoreSemantics _ MachState _
-                              init_machine 
+      end.
+    
+    Program Definition MachineSemantics: CoreSemantics G MachState mem.
+    apply (@Build_CoreSemantics _ MachState _
+                                init_machine 
                               at_external
                               after_external
                               halted
                               MachStep
-        );
-    unfold at_external, halted; try reflexivity.
-  auto.
-  Defined.
+          );
+      unfold at_external, halted; try reflexivity.
+    auto.
+    Defined.
+  End MachineSemantics.
 
 End FineMachine.

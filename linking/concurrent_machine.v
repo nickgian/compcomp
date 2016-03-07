@@ -144,11 +144,10 @@ Module CoarseMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineS
         machine_step U ms m U' ms m.
 
   Definition MachState: Type := (Sch * machine_state)%type.
-  Section MachineSemantics.
-    Variable aggelos : nat -> access_map.
+
+  Definition MachStep (aggelos : nat -> access_map) G (c:MachState) (m:mem) (c' :MachState) (m':mem) :=
+    @machine_step aggelos G (fst c) (snd c) m (fst c') (snd c) m'.
     
-    Definition MachStep G (c:MachState) (m:mem) (c' :MachState) (m':mem) :=
-      @machine_step aggelos G (fst c) (snd c) m (fst c') (snd c) m'.
 
     Definition at_external (st : MachState)
     : option (external_function * signature * list val) := None.
@@ -166,19 +165,20 @@ Module CoarseMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineS
       | Some c => Some (U, c)
     end.
   
-  Program Definition MachineSemantics: CoreSemantics G MachState mem.
+  Program Definition MachineSemantics (aggelos:nat -> access_map) :
+    CoreSemantics G MachState mem.
+  intros.
   apply (@Build_CoreSemantics _ MachState _
                               init_machine 
                               at_external
                               after_external
                               halted
-                              MachStep
+                              (MachStep aggelos)
         );
     unfold at_external, halted; try reflexivity.
   auto.
-    Defined.
-  End MachineSemantics.
-    
+  Defined.
+  
 End CoarseMachine.
 
 Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig TID).
@@ -237,10 +237,8 @@ Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig
         machine_step U ms m U' ms m.
 
   Definition MachState: Type := (Sch * machine_state)%type.
-  Section MachineSemantics.
-    Variable aggelos : nat -> access_map.
-    
-    Definition MachStep G (c:MachState) (m:mem)  (c' :MachState) (m':mem) :=
+
+    Definition MachStep aggelos G (c:MachState) (m:mem)  (c' :MachState) (m':mem) :=
       @machine_step aggelos G (fst c) (snd c) m (fst c') (snd c) m'.
 
     Definition at_external (st : MachState)
@@ -259,17 +257,18 @@ Module FineMachine (TID: ThreadID)(SCH:Scheduler TID)(SIG : ConcurrentMachineSig
       | Some c => Some (U, c)
       end.
     
-    Program Definition MachineSemantics: CoreSemantics G MachState mem.
+    Program Definition MachineSemantics (aggelos : nat -> access_map):
+      CoreSemantics G MachState mem.
+    intros.
     apply (@Build_CoreSemantics _ MachState _
                                 init_machine 
                               at_external
                               after_external
                               halted
-                              MachStep
+                              (MachStep aggelos)
           );
       unfold at_external, halted; try reflexivity.
     auto.
     Defined.
-  End MachineSemantics.
 
 End FineMachine.

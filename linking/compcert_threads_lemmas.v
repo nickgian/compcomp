@@ -1181,7 +1181,6 @@ Section FineSafety.
       | false => fun _ => false
     end (Logic.eq_refl pf). 
  
-
   Fixpoint filter_trace (tid_last : nat) (tr : trace) :=
     match tr with
       | nil => nil
